@@ -34,6 +34,7 @@ jobs:
     # --onefile: 1つのファイルにまとめる
     # --noconsole: コマンドプロンプトの黒い画面を非表示（GUIアプリ用）
     # --hidden-import: 読み込み漏れを防ぎたいライブラリを明示
+    # --collect-all: ライブラリの全ファイルを強制的に含める（fitz対策）
 
     # ←★追加：--name ""の部分を好きな名前にします
     - name: Build with PyInstaller
@@ -43,6 +44,7 @@ jobs:
         --noconsole 
         --name "HandwrittenImageMiya-v1.0.0" 
         --add-data "readme.md;."
+        --collect-all pymupdf
         --hidden-import openpyxl 
         --hidden-import PIL 
         --hidden-import tkinterdnd2 
