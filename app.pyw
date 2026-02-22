@@ -17,6 +17,20 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtCore import Qt, QPointF, QRectF, QLineF, QTimer
 
+# ==============================
+# リソースパス取得関数 (exe化対応)
+# ==============================
+def resource_path(relative_path):
+    """実行時（exe）でも通常時（.pyw）でも正しいファイルパスを取得する"""
+    try:
+        # PyInstallerで展開された時の一時フォルダパス
+        base_path = sys._MEIPASS
+    except Exception:
+        # 通常のPythonスクリプトとして実行した時のパス
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
+
 class CustomLineItem(QGraphicsLineItem):
     """線を描画し、当たり判定（ドラッグ範囲）を広げたカスタムアイテム"""
     def __init__(self, line, pen):
