@@ -1,4 +1,4 @@
-# app.py
+# -*- coding: utf-8 -*-
 import sys
 import os
 import math
@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QGraphicsRectItem, QGraphicsLineItem, QGraphicsTextItem,
     QGraphicsEllipseItem, QGraphicsPolygonItem, QGraphicsPathItem,
     QGraphicsItem, QMessageBox, QLabel, QMenu, QComboBox,
-    QWidget, QSizePolicy
+    QWidget, QSizePolicy, QDialog, QVBoxLayout, QTextEdit
 )
 from PyQt6.QtGui import (
     QPixmap, QImage, QPainter, QPen, QColor, QPolygonF, QFont, QAction, QTransform,
@@ -595,7 +595,61 @@ class AdvancedAnnotationApp(QMainWindow):
         self.current_dir = "" 
         self.current_ext = "" 
 
+        self.init_menubar()  # メニューバーの初期化を呼び出し
         self.init_toolbar()
+
+    def init_menubar(self):
+        """メニューバーを構築し、ヘルプメニューを追加する"""
+        menubar = self.menuBar()
+        help_menu = menubar.addMenu("ヘルプ")
+
+        readme_action = QAction("Readmeを表示", self)
+        readme_action.triggered.connect(self.show_readme)
+        help_menu.addAction(readme_action)
+
+        help_menu.addSeparator()
+
+        version_action = QAction("バージョン情報", self)
+        version_action.triggered.connect(self.show_version_info)
+        help_menu.addAction(version_action)
+
+    def show_readme(self):
+        """readme.mdを読み込み、専用のウィンドウで表示する"""
+        readme_path = resource_path("readme.md")
+        content = ""
+        
+        if os.path.exists(readme_path):
+            try:
+                with open(readme_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+            except Exception as e:
+                content = f"ファイルの読み込みに失敗しました:\n{e}"
+        else:
+            content = f"readme.md ファイルが見つかりませんでした。\n検索パス: {readme_path}"
+
+        # テキストを表示するためのダイアログを作成
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Readme")
+        dialog.resize(600, 450)
+        layout = QVBoxLayout(dialog)
+        
+        text_edit = QTextEdit(dialog)
+        text_edit.setPlainText(content)
+        text_edit.setReadOnly(True)  # 編集不可に設定
+        # Markdownのような等幅フォントの方が見やすい場合の設定
+        font = QFont("Consolas", 10)
+        font.setStyleHint(QFont.StyleHint.Monospace)
+        text_edit.setFont(font)
+        
+        layout.addWidget(text_edit)
+        dialog.exec()
+
+    def show_version_info(self):
+        """バージョン情報をメッセージボックスで表示する"""
+        title = "Advanced Annotation Tool"
+        version = "v1.0.0"
+        msg = f"{title}\nバージョン: {version}\n\nPyQt6ベースの高機能アノテーションツール"
+        QMessageBox.about(self, "バージョン情報", msg)
 
     def init_toolbar(self):
         toolbar = QToolBar("Main Toolbar")
