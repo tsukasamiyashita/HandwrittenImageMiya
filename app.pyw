@@ -595,7 +595,7 @@ class AdvancedAnnotationApp(QMainWindow):
         self.current_dir = "" 
         self.current_ext = "" 
 
-        self.init_menubar()  # メニューバーの初期化を呼び出し
+        self.init_menubar()
         self.init_toolbar()
 
     def init_menubar(self):
@@ -923,22 +923,23 @@ class AdvancedAnnotationApp(QMainWindow):
                 self.load_pdf_page()
 
     def save_file(self):
-        # 元の拡張子に基づいたデフォルト設定（PDFの場合はJPEG）
-        is_pdf = self.current_ext == ".pdf"
-        default_ext = ".jpg" if is_pdf else self.current_ext
+        # 元の拡張子をそのままデフォルト設定にする
+        default_ext = self.current_ext
         if not default_ext: default_ext = ".jpg"
         
         initial_name = f"{self.current_filename}_After{default_ext}"
         initial_path = os.path.join(self.current_dir, initial_name) if self.current_dir else initial_name
         
-        # フィルター文字列の作成（元の形式をデフォルト選択に）
+        # フィルター文字列の作成（元の形式を一番前にしてデフォルトにする）
         if default_ext == ".png":
-            filter_str = "PNG Image (*.png);;JPEG Image (*.jpg)"
-        elif default_ext in [".pdf"]:
-             filter_str = "PDF Document (*.pdf);;JPEG Image (*.jpg);;PNG Image (*.png)"
+            filter_str = "PNG Image (*.png);;JPEG Image (*.jpg);;PDF Document (*.pdf)"
+        elif default_ext == ".pdf":
+            filter_str = "PDF Document (*.pdf);;JPEG Image (*.jpg);;PNG Image (*.png)"
+        elif default_ext in [".jpg", ".jpeg"]:
+            filter_str = "JPEG Image (*.jpg);;PNG Image (*.png);;PDF Document (*.pdf)"
         else:
-            filter_str = "JPEG Image (*.jpg);;PNG Image (*.png)"
-        
+            filter_str = "JPEG Image (*.jpg);;PNG Image (*.png);;PDF Document (*.pdf)"
+            
         file_path, selected_filter = QFileDialog.getSaveFileName(
             self, "保存", initial_path, filter_str
         )
