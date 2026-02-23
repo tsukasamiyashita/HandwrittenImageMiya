@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QGraphicsRectItem, QGraphicsLineItem, QGraphicsTextItem,
     QGraphicsEllipseItem, QGraphicsPolygonItem, QGraphicsPathItem,
     QGraphicsItem, QMessageBox, QLabel, QMenu, QComboBox,
-    QWidget, QSizePolicy, QDialog, QVBoxLayout, QTextEdit
+    QWidget, QSizePolicy, QDialog, QVBoxLayout, QTextEdit, QPushButton
 )
 from PyQt6.QtGui import (
     QPixmap, QImage, QPainter, QPen, QColor, QPolygonF, QFont, QAction, QTransform,
@@ -579,6 +579,9 @@ class AdvancedAnnotationApp(QMainWindow):
         super().__init__()
         self.setWindowTitle("Advanced Annotation Tool")
         self.setGeometry(100, 100, 1200, 800)
+        
+        # 画面のスタイル（デザイン）を適用
+        self.apply_stylesheet()
 
         self.scene = AnnotationScene(self)
         self.scene.selectionChanged.connect(self.sync_properties_from_selection)
@@ -597,6 +600,130 @@ class AdvancedAnnotationApp(QMainWindow):
 
         self.init_menubar()
         self.init_toolbar()
+
+    def apply_stylesheet(self):
+        """清潔感のあるモダン・ライトテーマ（文字切れやダイアログのボタンバグを修正）"""
+        style = """
+        QMainWindow {
+            background-color: #F5F6F7;
+        }
+        /* メニューバー */
+        QMenuBar {
+            background-color: #FFFFFF;
+            border-bottom: 1px solid #E0E0E0;
+            font-size: 13px;
+            color: #333333;
+        }
+        QMenuBar::item {
+            background-color: transparent;
+            padding: 6px 12px;
+        }
+        QMenuBar::item:selected {
+            background-color: #E5F3FF;
+            color: #0066CC;
+        }
+        QMenu {
+            background-color: #FFFFFF;
+            color: #333333;
+            border: 1px solid #CCCCCC;
+            font-size: 13px;
+        }
+        QMenu::item {
+            padding: 6px 25px 6px 20px;
+        }
+        QMenu::item:selected {
+            background-color: #E5F3FF;
+            color: #0066CC;
+        }
+        /* ツールバー */
+        QToolBar {
+            background-color: #FFFFFF;
+            border-bottom: 1px solid #D0D0D0;
+            spacing: 6px;
+            padding: 6px;
+        }
+        /* ツールバーのボタン */
+        QToolButton {
+            color: #333333;
+            font-size: 13px;
+            border: 1px solid transparent;
+            border-radius: 4px;
+            padding: 5px 12px;
+            min-height: 22px;
+        }
+        QToolButton:hover {
+            background-color: #F0F0F0;
+            border: 1px solid #CCCCCC;
+        }
+        QToolButton:checked {
+            background-color: #E5F3FF;
+            border: 1px solid #0078D7;
+            color: #005A9E;
+            font-weight: bold;
+        }
+        /* コンボボックス（リストダウンボタン） */
+        QComboBox {
+            border: 1px solid #CCCCCC;
+            border-radius: 4px;
+            padding: 4px 10px;
+            background-color: #FFFFFF;
+            color: #333333;
+            min-height: 22px;
+            min-width: 90px;
+        }
+        QComboBox:hover, QComboBox:focus {
+            border: 1px solid #0078D7;
+        }
+        /* ★ ツールバー内のラベル（太さ：など）限定にしてダイアログの文字に影響させない */
+        QToolBar QLabel {
+            color: #444444;
+            font-weight: bold;
+            padding-left: 6px;
+            font-size: 13px;
+        }
+        /* 画像表示エリア（キャンバスの外側） */
+        QGraphicsView {
+            background-color: #D9E1E8;
+            border: none;
+        }
+        /* ダイアログ全般（QMessageBox, Readme等） */
+        QDialog, QMessageBox {
+            background-color: #F5F6F7;
+            color: #333333;
+        }
+        /* ダイアログ内のテキスト等 */
+        QMessageBox QLabel {
+            color: #333333;
+            font-size: 13px;
+            font-weight: normal;
+        }
+        /* ★ ダイアログ等の標準ボタン（ここを追加して文字が見えるように修正） */
+        QPushButton {
+            background-color: #FFFFFF;
+            color: #333333;
+            border: 1px solid #CCCCCC;
+            border-radius: 4px;
+            padding: 6px 20px;
+            min-width: 60px;
+            font-size: 13px;
+        }
+        QPushButton:hover {
+            background-color: #E5F3FF;
+            border: 1px solid #0078D7;
+        }
+        QPushButton:pressed {
+            background-color: #CCE4F7;
+        }
+        /* Readme用のテキストエリア */
+        QTextEdit {
+            background-color: #FFFFFF;
+            border: 1px solid #CCCCCC;
+            border-radius: 4px;
+            padding: 8px;
+            color: #333333;
+        }
+        """
+        self.setStyleSheet(style)
 
     def init_menubar(self):
         """メニューバーを構築し、ヘルプメニューを追加する"""
@@ -636,7 +763,6 @@ class AdvancedAnnotationApp(QMainWindow):
         text_edit = QTextEdit(dialog)
         text_edit.setPlainText(content)
         text_edit.setReadOnly(True)  # 編集不可に設定
-        # Markdownのような等幅フォントの方が見やすい場合の設定
         font = QFont("Consolas", 10)
         font.setStyleHint(QFont.StyleHint.Monospace)
         text_edit.setFont(font)
@@ -711,7 +837,7 @@ class AdvancedAnnotationApp(QMainWindow):
         color_action.triggered.connect(self.choose_color)
         toolbar.addAction(color_action)
 
-        toolbar.addWidget(QLabel("  🖊️ 太さ: "))
+        toolbar.addWidget(QLabel("🖊️ 太さ: "))
         self.width_combo = QComboBox(self)
         self.width_combo.setEditable(True) 
         width_options = ["0.5", "1.0", "1.5", "2.0", "3.0", "4.0", "5.0", "6.0", "8.0", "10.0", "12.0", "15.0", "20.0", "30.0", "50.0"]
