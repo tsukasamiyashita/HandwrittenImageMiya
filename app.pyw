@@ -3,6 +3,7 @@ import sys
 import os
 import math
 import fitz  # PyMuPDF
+import tempfile  # ★追加：一時ファイルを安全に処理するため
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QGraphicsView, QGraphicsScene,
     QToolBar, QFileDialog, QInputDialog, QColorDialog,
@@ -674,7 +675,7 @@ class AdvancedAnnotationApp(QMainWindow):
         QComboBox:hover, QComboBox:focus {
             border: 1px solid #0078D7;
         }
-        /* ★ ツールバー内のラベル（太さ：など）限定にしてダイアログの文字に影響させない */
+        /* ツールバー内のラベル（太さ：など）限定にしてダイアログの文字に影響させない */
         QToolBar QLabel {
             color: #444444;
             font-weight: bold;
@@ -1056,7 +1057,7 @@ class AdvancedAnnotationApp(QMainWindow):
         initial_name = f"{self.current_filename}_After{default_ext}"
         initial_path = os.path.join(self.current_dir, initial_name) if self.current_dir else initial_name
         
-        # フィルター文字列の作成（元の形式を一番前にしてデフォルトにする）
+        # フィルター文字列の作成
         if default_ext == ".png":
             filter_str = "PNG Image (*.png);;JPEG Image (*.jpg);;PDF Document (*.pdf)"
         elif default_ext == ".pdf":
@@ -1074,49 +1075,63 @@ class AdvancedAnnotationApp(QMainWindow):
 
         save_ext = os.path.splitext(file_path)[1].lower()
 
-        # PDF保存ロジック（画像化してPDFに変換）
-        if save_ext == ".pdf":
+        rect = self.scene.sceneRect()
+        if rect.isEmpty() or rect.width() <= 0 or rect.height() <= 0:
+            QMessageBox.warning(self, "エラー", "保存する内容がありません（画面サイズが無効です）。")
+            return
+
+        try:
+            # PDF保存ロジック（画像化してPDFに変換）
+            if save_ext == ".pdf":
+                self.scene.clearSelection()
+                image = QImage(int(rect.width()), int(rect.height()), QImage.Format.Format_ARGB32)
+                image.fill(Qt.GlobalColor.white)
+                painter = QPainter(image)
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                self.scene.render(painter)
+                painter.end()
+                
+                # 一時ファイルを経由してPDF化 (権限エラー回避のためtempfileを使用)
+                temp_img = os.path.join(tempfile.gettempdir(), "temp_save_anno.jpg")
+                image.save(temp_img, "JPEG", 95)
+                
+                doc = fitz.open()
+                imgdoc = fitz.open(temp_img)
+                pdfbytes = imgdoc.convert_to_pdf()
+                imgdoc.close()
+                
+                # ★ C++側のガベージコレクション問題を回避するため変数に保持して渡す
+                pdf_stream = fitz.open("pdf", pdfbytes)
+                doc.insert_pdf(pdf_stream)
+                doc.save(file_path)
+                
+                pdf_stream.close()
+                doc.close()
+                if os.path.exists(temp_img): os.remove(temp_img)
+                
+                self.scene.has_unsaved_changes = False
+                self.show_auto_close_message("完了", "PDFとして保存しました。")
+                return
+
+            # 画像保存ロジック
             self.scene.clearSelection()
-            rect = self.scene.sceneRect()
             image = QImage(int(rect.width()), int(rect.height()), QImage.Format.Format_ARGB32)
-            image.fill(Qt.GlobalColor.white)
+            image.fill(Qt.GlobalColor.transparent)
             painter = QPainter(image)
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             self.scene.render(painter)
             painter.end()
-            
-            # 一時ファイルを経由してPDF化
-            temp_img = "temp_save.jpg"
-            image.save(temp_img, "JPEG", 95)
-            doc = fitz.open()
-            imgdoc = fitz.open(temp_img)
-            pdfbytes = imgdoc.convert_to_pdf()
-            imgdoc.close()
-            doc.insert_pdf(fitz.open("pdf", pdfbytes))
-            doc.save(file_path)
-            doc.close()
-            if os.path.exists(temp_img): os.remove(temp_img)
-            
-            self.scene.has_unsaved_changes = False
-            self.show_auto_close_message("完了", "PDFとして保存しました。")
-            return
 
-        # 画像保存ロジック
-        self.scene.clearSelection()
-        rect = self.scene.sceneRect()
-        image = QImage(int(rect.width()), int(rect.height()), QImage.Format.Format_ARGB32)
-        image.fill(Qt.GlobalColor.transparent)
-        painter = QPainter(image)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        self.scene.render(painter)
-        painter.end()
-
-        if image.save(file_path):
-            self.scene.has_unsaved_changes = False
-            self.current_dir = os.path.dirname(file_path)
-            self.show_auto_close_message("完了", f"{save_ext.upper()}として保存しました。")
-        else:
-            QMessageBox.warning(self, "エラー", "保存に失敗しました。")
+            if image.save(file_path):
+                self.scene.has_unsaved_changes = False
+                self.current_dir = os.path.dirname(file_path)
+                self.show_auto_close_message("完了", f"{save_ext.upper()}として保存しました。")
+            else:
+                QMessageBox.warning(self, "エラー", "保存に失敗しました。")
+                
+        except Exception as e:
+            # 予期せぬエラーでもアプリが落ちないようにする
+            QMessageBox.critical(self, "致命的なエラー", f"保存処理中にエラーが発生しました。\n{e}")
 
     def show_auto_close_message(self, title, text):
         msg = QMessageBox(self)
