@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+# app.py
 import sys
 import os
 import math
@@ -578,7 +578,7 @@ class AnnotationScene(QGraphicsScene):
 class AdvancedAnnotationApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Advanced Annotation Tool")
+        self.setWindowTitle("HandwrittenImageMiya")
         self.setGeometry(100, 100, 1200, 800)
         
         # 画面のスタイル（デザイン）を適用
@@ -773,7 +773,7 @@ class AdvancedAnnotationApp(QMainWindow):
 
     def show_version_info(self):
         """バージョン情報をメッセージボックスで表示する"""
-        title = "Advanced Annotation Tool"
+        title = "HandwrittenImageMiya"
         version = "v1.0.0"
         msg = f"{title}\nバージョン: {version}\n\nPyQt6ベースの高機能アノテーションツール"
         QMessageBox.about(self, "バージョン情報", msg)
@@ -1037,7 +1037,7 @@ class AdvancedAnnotationApp(QMainWindow):
         fmt = QImage.Format.Format_RGB888
         qimg = QImage(pix.samples, pix.width, pix.height, pix.stride, fmt)
         self.scene.set_background(QPixmap.fromImage(qimg))
-        self.setWindowTitle(f"Advanced Annotation Tool - Page {self.current_pdf_page + 1}/{len(self.current_pdf_doc)}")
+        self.setWindowTitle(f"HandwrittenImageMiya - Page {self.current_pdf_page + 1}/{len(self.current_pdf_doc)}")
         self.fit_to_view()
 
     def change_page(self, delta):
