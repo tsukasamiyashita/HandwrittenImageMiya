@@ -1,9 +1,9 @@
-# app.py
+# app.pyw
 import sys
 import os
 import math
-import fitz  # PyMuPDF
-import tempfile  # ★追加：一時ファイルを安全に処理するため
+import fitz # PyMuPDF
+import tempfile # 一時ファイルを安全に処理するため
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QGraphicsView, QGraphicsScene,
     QToolBar, QFileDialog, QInputDialog, QColorDialog,
@@ -29,7 +29,6 @@ def resource_path(relative_path):
     except Exception:
         # 通常のPythonスクリプトとして実行した時のパス
         base_path = os.path.abspath(".")
-
     return os.path.join(base_path, relative_path)
 
 class CustomLineItem(QGraphicsLineItem):
@@ -194,7 +193,7 @@ class AnnotationScene(QGraphicsScene):
             if event.button() == Qt.MouseButton.RightButton:
                 super().mousePressEvent(event)
                 return
-                
+            
             pos = event.scenePos()
             self.resizing_item = None
             self.resize_mode = None
@@ -446,16 +445,22 @@ class AnnotationScene(QGraphicsScene):
             self.current_path = None
             self.has_unsaved_changes = True
 
+    def delete_selected_items(self):
+        """選択されているアイテムを削除する"""
+        deleted = False
+        for item in self.selectedItems():
+            if item != self.bg_item:
+                self.removeItem(item)
+                deleted = True
+        if deleted:
+            self.has_unsaved_changes = True
+
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Delete:
-            deleted = False
-            for item in self.selectedItems():
-                if item != self.bg_item:
-                    self.removeItem(item)
-                    deleted = True
-            if deleted:
-                self.has_unsaved_changes = True
-        super().keyPressEvent(event)
+            self.delete_selected_items()
+            super().keyPressEvent(event)
+        else:
+            super().keyPressEvent(event)
 
     def contextMenuEvent(self, event):
         if self.current_tool != "select":
@@ -763,7 +768,7 @@ class AdvancedAnnotationApp(QMainWindow):
         
         text_edit = QTextEdit(dialog)
         text_edit.setPlainText(content)
-        text_edit.setReadOnly(True)  # 編集不可に設定
+        text_edit.setReadOnly(True) # 編集不可に設定
         font = QFont("Consolas", 10)
         font.setStyleHint(QFont.StyleHint.Monospace)
         text_edit.setFont(font)
@@ -774,7 +779,7 @@ class AdvancedAnnotationApp(QMainWindow):
     def show_version_info(self):
         """バージョン情報をメッセージボックスで表示する"""
         title = "HandwrittenImageMiya"
-        version = "v1.0.0"
+        version = "v1.1.0"
         msg = f"{title}\nバージョン: {version}\n\nPyQt6ベースの高機能アノテーションツール"
         QMessageBox.about(self, "バージョン情報", msg)
 
@@ -832,6 +837,13 @@ class AdvancedAnnotationApp(QMainWindow):
         self.tool_actions["text"] = act_text
 
         self.tool_actions["select"].setChecked(True)
+        toolbar.addSeparator()
+
+        # 追加: 削除ボタン
+        delete_action = QAction("🗑️ 削除", self)
+        delete_action.triggered.connect(self.scene.delete_selected_items)
+        toolbar.addAction(delete_action)
+
         toolbar.addSeparator()
 
         color_action = QAction("🎨 色変更", self)
@@ -932,7 +944,7 @@ class AdvancedAnnotationApp(QMainWindow):
         self.scene.current_tool = tool_id
         for tid, action in self.tool_actions.items():
             action.setChecked(tid == tool_id)
-        
+            
         if tool_id == "select":
             self.view.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
             self.view.viewport().setCursor(Qt.CursorShape.ArrowCursor)
@@ -1066,7 +1078,7 @@ class AdvancedAnnotationApp(QMainWindow):
             filter_str = "JPEG Image (*.jpg);;PNG Image (*.png);;PDF Document (*.pdf)"
         else:
             filter_str = "JPEG Image (*.jpg);;PNG Image (*.png);;PDF Document (*.pdf)"
-            
+        
         file_path, selected_filter = QFileDialog.getSaveFileName(
             self, "保存", initial_path, filter_str
         )
