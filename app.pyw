@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import (
     QPixmap, QImage, QPainter, QPen, QColor, QPolygonF, QFont, QAction, QTransform,
-    QPainterPath, QPainterPathStroker, QImageReader
+    QPainterPath, QPainterPathStroker, QImageReader, QBrush
 )
 from PyQt6.QtCore import Qt, QPointF, QRectF, QLineF, QTimer
 
@@ -120,6 +120,36 @@ class CustomPolygonItem(QGraphicsPolygonItem):
         stroker.setWidth(max(self.pen().widthF(), 30.0))
         return stroker.createStroke(path)
 
+class CustomTextItem(QGraphicsTextItem):
+    """背景色や枠線を設定できるカスタムテキストアイテム"""
+    def __init__(self, text):
+        super().__init__(text)
+        self._bg_brush = QBrush(Qt.BrushStyle.NoBrush)
+        self._border_pen = QPen(Qt.PenStyle.NoPen)
+        self.setFlags(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable | QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
+
+    def brush(self): 
+        return self._bg_brush
+        
+    def setBrush(self, brush):
+        self._bg_brush = brush
+        self.update()
+
+    def pen(self): 
+        return self._border_pen
+        
+    def setPen(self, pen):
+        self._border_pen = pen
+        self.update()
+
+    def paint(self, painter, option, widget):
+        # 背景と枠線が設定されていれば描画
+        if self._bg_brush.style() != Qt.BrushStyle.NoBrush or self._border_pen.style() != Qt.PenStyle.NoPen:
+            painter.setBrush(self._bg_brush)
+            painter.setPen(self._border_pen)
+            painter.drawRect(self.boundingRect())
+        super().paint(painter, option, widget)
+
 
 class AnnotationScene(QGraphicsScene):
     """画像と注釈を管理するシーン"""
@@ -128,12 +158,18 @@ class AnnotationScene(QGraphicsScene):
         self.current_tool = "select"
         self.current_line_type = "line"
         self.current_shape_type = "rect"
-        self.current_color = QColor(Qt.GlobalColor.red)
+        
+        # 枠線・文字色と、塗りつぶし・背景色を分離
+        self.current_pen_color = QColor(Qt.GlobalColor.red)
+        self.current_text_color = QColor(Qt.GlobalColor.red) # 文字色を追加
+        self.current_brush_color = QColor(Qt.GlobalColor.white)
+        self.use_fill = False
         self.pen_width = 5.0
         
         self.start_point = None
         self.temp_item = None
         self.bg_item = None
+        self.pending_text_item = None
 
         self.resizing_item = None
         self.resize_mode = None
@@ -148,12 +184,129 @@ class AnnotationScene(QGraphicsScene):
         self.copied_data = None
         
         self.has_unsaved_changes = False
+        
+        # Undo/Redo用のスタック
+        self.undo_stack = []
+        self.redo_stack = []
+        self.was_modified = False
+
+    def get_next_z_value(self):
+        """シーン内で最も前面に配置するためのZ値を取得"""
+        max_z = 0.0
+        for item in self.items():
+            if item != self.bg_item and item.zValue() > max_z:
+                max_z = item.zValue()
+        return max_z + 1.0
+
+    def bring_to_front(self, item):
+        """指定したアイテムを最前面に移動"""
+        if not item or item == self.bg_item:
+            return
+        item.setZValue(self.get_next_z_value())
+        self.has_unsaved_changes = True
+        self.save_state()
+        self.update()
+
+    def get_scene_state(self):
+        """現在のシーンのアイテム状態をシリアライズして取得"""
+        state = []
+        for item in self.items():
+            if item == self.bg_item or item.zValue() < 0 or item == self.pending_text_item:
+                continue
+            if isinstance(item, ArrowItem):
+                state.append({'type': 'arrow', 'line': item.line(), 'pen': QPen(item.pen()), 'pos': item.pos()})
+            elif isinstance(item, CustomLineItem):
+                state.append({'type': 'line', 'line': item.line(), 'pen': QPen(item.pen()), 'pos': item.pos()})
+            elif isinstance(item, CustomRectItem):
+                state.append({'type': 'rect', 'rect': item.rect(), 'pen': QPen(item.pen()), 'brush': QBrush(item.brush()), 'pos': item.pos()})
+            elif isinstance(item, CustomEllipseItem):
+                state.append({'type': 'ellipse', 'rect': item.rect(), 'pen': QPen(item.pen()), 'brush': QBrush(item.brush()), 'pos': item.pos()})
+            elif isinstance(item, CustomPolygonItem):
+                state.append({'type': 'polygon', 'polygon': item.polygon(), 'pen': QPen(item.pen()), 'brush': QBrush(item.brush()), 'pos': item.pos()})
+            elif isinstance(item, CustomPathItem):
+                state.append({'type': 'path', 'path': QPainterPath(item.path()), 'pen': QPen(item.pen()), 'brush': QBrush(item.brush()), 'pos': item.pos()})
+            elif isinstance(item, CustomTextItem):
+                state.append({
+                    'type': 'text', 'text': item.toPlainText(),
+                    'font': QFont(item.font()), 'color': QColor(item.defaultTextColor()),
+                    'pen': QPen(item.pen()), 'brush': QBrush(item.brush()),
+                    'scale': item.scale(), 'pos': item.pos()
+                })
+        return list(reversed(state))
+
+    def restore_scene_state(self, state):
+        """保存された状態からシーンを復元"""
+        for item in self.items():
+            if item != self.bg_item:
+                self.removeItem(item)
+        
+        self.clearSelection()
+
+        for i, data in enumerate(state):
+            item_type = data['type']
+            new_item = None
+            if item_type == 'arrow':
+                new_item = ArrowItem(data['line'], data['pen'])
+            elif item_type == 'line':
+                new_item = CustomLineItem(data['line'], data['pen'])
+            elif item_type == 'rect':
+                new_item = CustomRectItem(data['rect'], data['pen'])
+                new_item.setBrush(data.get('brush', QBrush(Qt.BrushStyle.NoBrush)))
+            elif item_type == 'ellipse':
+                new_item = CustomEllipseItem(data['rect'], data['pen'])
+                new_item.setBrush(data.get('brush', QBrush(Qt.BrushStyle.NoBrush)))
+            elif item_type == 'polygon':
+                new_item = CustomPolygonItem(data['polygon'], data['pen'])
+                new_item.setBrush(data.get('brush', QBrush(Qt.BrushStyle.NoBrush)))
+            elif item_type == 'path':
+                new_item = CustomPathItem(data['path'], data['pen'])
+                new_item.setBrush(data.get('brush', QBrush(Qt.BrushStyle.NoBrush)))
+            elif item_type == 'text':
+                new_item = CustomTextItem(data['text'])
+                new_item.setFont(data['font'])
+                new_item.setDefaultTextColor(data['color'])
+                new_item.setPen(data.get('pen', QPen(Qt.PenStyle.NoPen)))
+                new_item.setBrush(data.get('brush', QBrush(Qt.BrushStyle.NoBrush)))
+                new_item.setScale(data['scale'])
+            
+            if new_item:
+                new_item.setZValue(float(i + 1))
+                new_item.setPos(data['pos'])
+                self.addItem(new_item)
+
+    def save_state(self):
+        """操作のたびに状態をスタックに保存"""
+        state = self.get_scene_state()
+        self.undo_stack.append(state)
+        self.redo_stack.clear()
+        if len(self.undo_stack) > 30:
+            self.undo_stack.pop(0)
+
+    def undo(self):
+        """戻る"""
+        if len(self.undo_stack) > 1:
+            self.redo_stack.append(self.undo_stack.pop())
+            self.restore_scene_state(self.undo_stack[-1])
+            self.has_unsaved_changes = True
+
+    def redo(self):
+        """進む"""
+        if self.redo_stack:
+            state = self.redo_stack.pop()
+            self.undo_stack.append(state)
+            self.restore_scene_state(state)
+            self.has_unsaved_changes = True
 
     def set_background(self, pixmap):
         self.clear()
         self.bg_item = self.addPixmap(pixmap)
+        self.bg_item.setZValue(-1.0) 
         self.bg_item.setFlags(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable ^ QGraphicsItem.GraphicsItemFlag.ItemIsFocusable) 
         self.setSceneRect(QRectF(pixmap.rect()))
+        
+        self.undo_stack.clear()
+        self.redo_stack.clear()
+        self.save_state()
         self.has_unsaved_changes = False
 
     def drawForeground(self, painter, rect):
@@ -167,7 +320,7 @@ class AnnotationScene(QGraphicsScene):
         handle_size = 12
 
         for item in self.selectedItems():
-            if item == self.bg_item:
+            if item == self.bg_item or item == self.pending_text_item:
                 continue
 
             if isinstance(item, (QGraphicsRectItem, QGraphicsEllipseItem)):
@@ -184,11 +337,30 @@ class AnnotationScene(QGraphicsScene):
                 p2 = item.mapToScene(item.line().p2())
                 painter.drawRect(QRectF(p1.x() - handle_size/2, p1.y() - handle_size/2, handle_size, handle_size))
                 painter.drawRect(QRectF(p2.x() - handle_size/2, p2.y() - handle_size/2, handle_size, handle_size))
-            elif isinstance(item, QGraphicsTextItem):
+            elif isinstance(item, CustomTextItem):
                 br = item.mapToScene(item.boundingRect().bottomRight())
                 painter.drawRect(QRectF(br.x() - handle_size/2, br.y() - handle_size/2, handle_size, handle_size))
 
     def mousePressEvent(self, event):
+        # プレビュー中のテキスト配置確定/キャンセル
+        if self.current_tool == "text" and getattr(self, 'pending_text_item', None):
+            if event.button() == Qt.MouseButton.LeftButton:
+                self.pending_text_item.setPos(event.scenePos())
+                self.pending_text_item = None
+                self.has_unsaved_changes = True
+                self.save_state()
+                if hasattr(self.parent(), 'set_tool'):
+                    self.parent().set_tool("select")
+                event.accept()
+                return
+            elif event.button() == Qt.MouseButton.RightButton:
+                self.removeItem(self.pending_text_item)
+                self.pending_text_item = None
+                if hasattr(self.parent(), 'set_tool'):
+                    self.parent().set_tool("select")
+                event.accept()
+                return
+
         if self.current_tool == "select":
             if event.button() == Qt.MouseButton.RightButton:
                 super().mousePressEvent(event)
@@ -197,6 +369,7 @@ class AnnotationScene(QGraphicsScene):
             pos = event.scenePos()
             self.resizing_item = None
             self.resize_mode = None
+            self.was_modified = False
 
             handle_area = 30
             for item in self.selectedItems():
@@ -242,7 +415,7 @@ class AnnotationScene(QGraphicsScene):
                         self.resize_mode = "line_p2"
                         event.accept()
                         return
-                elif isinstance(item, QGraphicsTextItem):
+                elif isinstance(item, CustomTextItem):
                     br = item.mapToScene(item.boundingRect().bottomRight())
                     if (pos - br).manhattanLength() < handle_area:
                         self.resizing_item = item
@@ -259,11 +432,14 @@ class AnnotationScene(QGraphicsScene):
 
         if event.button() == Qt.MouseButton.LeftButton:
             self.start_point = event.scenePos()
-            pen = QPen(self.current_color)
+            
+            pen = QPen(self.current_pen_color)
             pen.setWidthF(self.pen_width)
             pen.setStyle(Qt.PenStyle.SolidLine)
             pen.setCapStyle(Qt.PenCapStyle.RoundCap)
             pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            
+            brush = QBrush(self.current_brush_color) if self.use_fill else QBrush(Qt.BrushStyle.NoBrush)
 
             if self.current_tool == "line":
                 if self.current_line_type == "line":
@@ -273,29 +449,29 @@ class AnnotationScene(QGraphicsScene):
                 elif self.current_line_type == "freehand":
                     self.current_path = QPainterPath(self.start_point)
                     self.temp_item = CustomPathItem(self.current_path, pen)
+                    self.temp_item.setBrush(brush)
+                self.temp_item.setZValue(self.get_next_z_value())
                 self.addItem(self.temp_item)
             elif self.current_tool == "shape":
                 if self.current_shape_type == "rect":
                     self.temp_item = CustomRectItem(QRectF(self.start_point, self.start_point), pen)
+                    self.temp_item.setBrush(brush)
                 elif self.current_shape_type == "ellipse":
                     self.temp_item = CustomEllipseItem(QRectF(self.start_point, self.start_point), pen)
+                    self.temp_item.setBrush(brush)
                 elif self.current_shape_type == "triangle":
                     self.temp_item = CustomPolygonItem(QPolygonF([self.start_point, self.start_point, self.start_point]), pen)
+                    self.temp_item.setBrush(brush)
+                self.temp_item.setZValue(self.get_next_z_value())
                 self.addItem(self.temp_item)
-            elif self.current_tool == "text":
-                text, ok = QInputDialog.getMultiLineText(None, "テキスト入力", "文字を入力してください:")
-                if ok and text:
-                    font = QFont("Arial")
-                    font.setPointSizeF(max(6.0, self.pen_width * 3.0))
-                    text_item = self.addText(text, font)
-                    text_item.setDefaultTextColor(self.current_color)
-                    text_item.setPos(self.start_point)
-                    text_item.setFlags(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable | QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
-                    self.has_unsaved_changes = True
-                self.start_point = None
-                self.temp_item = None
 
     def mouseMoveEvent(self, event):
+        # プレビューテキストの追従
+        if self.current_tool == "text" and getattr(self, 'pending_text_item', None):
+            self.pending_text_item.setPos(event.scenePos())
+            event.accept()
+            return
+
         if self.current_tool == "select":
             if event.buttons() == Qt.MouseButton.NoButton:
                 pos = event.scenePos()
@@ -326,7 +502,7 @@ class AnnotationScene(QGraphicsScene):
                             on_handle = True
                             cursor_shape = Qt.CursorShape.CrossCursor
                             break
-                    elif isinstance(item, QGraphicsTextItem):
+                    elif isinstance(item, CustomTextItem):
                         br = item.mapToScene(item.boundingRect().bottomRight())
                         if (pos - br).manhattanLength() < handle_area:
                             on_handle = True
@@ -391,6 +567,7 @@ class AnnotationScene(QGraphicsScene):
                     item.setScale(new_scale)
                 
                 self.has_unsaved_changes = True
+                self.was_modified = True
                 self.update() 
                 event.accept()
                 return
@@ -400,6 +577,7 @@ class AnnotationScene(QGraphicsScene):
                 for item in self.selectedItems():
                     if item != self.bg_item:
                         self.has_unsaved_changes = True
+                        self.was_modified = True
                         is_moving = True
                         break
             super().mouseMoveEvent(event)
@@ -427,6 +605,10 @@ class AnnotationScene(QGraphicsScene):
 
     def mouseReleaseEvent(self, event):
         if self.current_tool == "select":
+            if getattr(self, 'was_modified', False):
+                self.save_state()
+                self.was_modified = False
+            
             if self.resizing_item:
                 self.resizing_item = None
                 self.resize_mode = None
@@ -444,6 +626,7 @@ class AnnotationScene(QGraphicsScene):
             self.temp_item = None
             self.current_path = None
             self.has_unsaved_changes = True
+            self.save_state()
 
     def delete_selected_items(self):
         """選択されているアイテムを削除する"""
@@ -454,6 +637,7 @@ class AnnotationScene(QGraphicsScene):
                 deleted = True
         if deleted:
             self.has_unsaved_changes = True
+            self.save_state()
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Delete:
@@ -475,6 +659,12 @@ class AnnotationScene(QGraphicsScene):
             target_item = None
 
         menu = QMenu()
+        
+        bring_front_action = menu.addAction("⏫ 前面に配置")
+        bring_front_action.setEnabled(target_item is not None)
+        
+        menu.addSeparator()
+        
         copy_action = menu.addAction("コピー")
         copy_action.setEnabled(target_item is not None)
         
@@ -482,13 +672,15 @@ class AnnotationScene(QGraphicsScene):
         paste_action.setEnabled(self.copied_data is not None)
 
         edit_text_action = None
-        if isinstance(target_item, QGraphicsTextItem):
+        if isinstance(target_item, CustomTextItem):
             menu.addSeparator()
             edit_text_action = menu.addAction("テキストを編集")
 
         action = menu.exec(event.screenPos())
 
-        if action == copy_action:
+        if action == bring_front_action:
+            self.bring_to_front(target_item)
+        elif action == copy_action:
             self.copy_item(target_item)
         elif action == paste_action:
             self.paste_item(pos)
@@ -501,17 +693,18 @@ class AnnotationScene(QGraphicsScene):
         elif isinstance(item, CustomLineItem):
             self.copied_data = {'type': 'line', 'line': item.line(), 'pen': QPen(item.pen())}
         elif isinstance(item, CustomRectItem):
-            self.copied_data = {'type': 'rect', 'rect': item.rect(), 'pen': QPen(item.pen())}
+            self.copied_data = {'type': 'rect', 'rect': item.rect(), 'pen': QPen(item.pen()), 'brush': QBrush(item.brush())}
         elif isinstance(item, CustomEllipseItem):
-            self.copied_data = {'type': 'ellipse', 'rect': item.rect(), 'pen': QPen(item.pen())}
+            self.copied_data = {'type': 'ellipse', 'rect': item.rect(), 'pen': QPen(item.pen()), 'brush': QBrush(item.brush())}
         elif isinstance(item, CustomPolygonItem):
-            self.copied_data = {'type': 'polygon', 'polygon': item.polygon(), 'pen': QPen(item.pen())}
+            self.copied_data = {'type': 'polygon', 'polygon': item.polygon(), 'pen': QPen(item.pen()), 'brush': QBrush(item.brush())}
         elif isinstance(item, CustomPathItem):
-            self.copied_data = {'type': 'path', 'path': QPainterPath(item.path()), 'pen': QPen(item.pen())}
-        elif isinstance(item, QGraphicsTextItem):
+            self.copied_data = {'type': 'path', 'path': QPainterPath(item.path()), 'pen': QPen(item.pen()), 'brush': QBrush(item.brush())}
+        elif isinstance(item, CustomTextItem):
             self.copied_data = {
                 'type': 'text', 'text': item.toPlainText(),
                 'font': QFont(item.font()), 'color': QColor(item.defaultTextColor()),
+                'pen': QPen(item.pen()), 'brush': QBrush(item.brush()),
                 'scale': item.scale()
             }
         else:
@@ -539,6 +732,7 @@ class AnnotationScene(QGraphicsScene):
             new_rect = QRectF(pos.x(), pos.y(), old_rect.width(), old_rect.height())
             new_pen = QPen(data['pen'])
             new_item = CustomRectItem(new_rect, new_pen) if item_type == 'rect' else CustomEllipseItem(new_rect, new_pen)
+            new_item.setBrush(data.get('brush', QBrush(Qt.BrushStyle.NoBrush)))
 
         elif item_type in ['polygon']:
             old_poly = data['polygon']
@@ -548,6 +742,7 @@ class AnnotationScene(QGraphicsScene):
             new_poly = old_poly.translated(dx_poly, dy_poly)
             new_pen = QPen(data['pen'])
             new_item = CustomPolygonItem(new_poly, new_pen)
+            new_item.setBrush(data.get('brush', QBrush(Qt.BrushStyle.NoBrush)))
             
         elif item_type == 'path':
             old_path = data['path']
@@ -557,27 +752,32 @@ class AnnotationScene(QGraphicsScene):
             new_path = old_path.translated(dx_path, dy_path)
             new_pen = QPen(data['pen'])
             new_item = CustomPathItem(new_path, new_pen)
+            new_item.setBrush(data.get('brush', QBrush(Qt.BrushStyle.NoBrush)))
 
         elif item_type == 'text':
-            new_item = self.addText(data['text'], QFont(data['font']))
-            new_item.setDefaultTextColor(QColor(data['color']))
+            new_item = CustomTextItem(data['text'])
+            new_item.setFont(data['font'])
+            new_item.setDefaultTextColor(data['color'])
+            new_item.setPen(data.get('pen', QPen(Qt.PenStyle.NoPen)))
+            new_item.setBrush(data.get('brush', QBrush(Qt.BrushStyle.NoBrush)))
             new_item.setPos(pos)
             new_item.setScale(data['scale'])
-            new_item.setFlags(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable | QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
 
         if new_item:
-            if item_type != 'text':
-                self.addItem(new_item)
+            new_item.setZValue(self.get_next_z_value())
+            self.addItem(new_item)
             new_item.setSelected(True)
             self.has_unsaved_changes = True
+            self.save_state()
 
     def edit_text_item(self, item):
-        if isinstance(item, QGraphicsTextItem):
+        if isinstance(item, CustomTextItem):
             current_text = item.toPlainText()
             new_text, ok = QInputDialog.getMultiLineText(None, "テキストの編集", "文字を変更してください:", current_text)
             if ok and new_text and new_text != current_text:
                 item.setPlainText(new_text)
                 self.has_unsaved_changes = True
+                self.save_state()
 
 
 class AdvancedAnnotationApp(QMainWindow):
@@ -595,7 +795,7 @@ class AdvancedAnnotationApp(QMainWindow):
         self.view = QGraphicsView(self.scene)
         self.view.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.view.setDragMode(QGraphicsView.DragMode.NoDrag)
-        self.view.setMouseTracking(True)
+        self.view.setMouseTracking(True) # マウス追従プレビューのために必要
         self.setCentralWidget(self.view)
 
         self.current_pdf_doc = None
@@ -608,7 +808,7 @@ class AdvancedAnnotationApp(QMainWindow):
         self.init_toolbar()
 
     def apply_stylesheet(self):
-        """清潔感のあるモダン・ライトテーマ（文字切れやダイアログのボタンバグを修正）"""
+        """清潔感のあるモダン・ライトテーマ（コンパクトなボタンに対応）"""
         style = """
         QMainWindow {
             background-color: #F5F6F7;
@@ -645,17 +845,17 @@ class AdvancedAnnotationApp(QMainWindow):
         QToolBar {
             background-color: #FFFFFF;
             border-bottom: 1px solid #D0D0D0;
-            spacing: 6px;
-            padding: 6px;
+            spacing: 4px;
+            padding: 4px;
         }
-        /* ツールバーのボタン */
+        /* ツールバーのボタン（コンパクト化） */
         QToolButton {
             color: #333333;
-            font-size: 13px;
+            font-size: 12px;
             border: 1px solid transparent;
             border-radius: 4px;
-            padding: 5px 12px;
-            min-height: 22px;
+            padding: 4px 8px;
+            min-height: 20px;
         }
         QToolButton:hover {
             background-color: #F0F0F0;
@@ -667,15 +867,16 @@ class AdvancedAnnotationApp(QMainWindow):
             color: #005A9E;
             font-weight: bold;
         }
-        /* コンボボックス（リストダウンボタン） */
+        /* コンボボックス（リストダウンボタンのコンパクト化） */
         QComboBox {
             border: 1px solid #CCCCCC;
             border-radius: 4px;
-            padding: 4px 10px;
+            padding: 2px 8px;
             background-color: #FFFFFF;
             color: #333333;
-            min-height: 22px;
-            min-width: 90px;
+            font-size: 12px;
+            min-height: 20px;
+            min-width: 80px;
         }
         QComboBox:hover, QComboBox:focus {
             border: 1px solid #0078D7;
@@ -684,8 +885,8 @@ class AdvancedAnnotationApp(QMainWindow):
         QToolBar QLabel {
             color: #444444;
             font-weight: bold;
-            padding-left: 6px;
-            font-size: 13px;
+            padding-left: 4px;
+            font-size: 12px;
         }
         /* 画像表示エリア（キャンバスの外側） */
         QGraphicsView {
@@ -703,7 +904,7 @@ class AdvancedAnnotationApp(QMainWindow):
             font-size: 13px;
             font-weight: normal;
         }
-        /* ★ ダイアログ等の標準ボタン（ここを追加して文字が見えるように修正） */
+        /* ダイアログ等の標準ボタン */
         QPushButton {
             background-color: #FFFFFF;
             color: #333333;
@@ -779,117 +980,201 @@ class AdvancedAnnotationApp(QMainWindow):
     def show_version_info(self):
         """バージョン情報をメッセージボックスで表示する"""
         title = "HandwrittenImageMiya"
-        version = "v1.1.0"
+        version = "v1.2.0"
         msg = f"{title}\nバージョン: {version}\n\nPyQt6ベースの高機能アノテーションツール"
         QMessageBox.about(self, "バージョン情報", msg)
 
     def init_toolbar(self):
-        toolbar = QToolBar("Main Toolbar")
-        toolbar.setMovable(False)
-        self.addToolBar(toolbar)
+        # ＝＝＝ 1段目のツールバー（ファイル操作、表示、ページ遷移） ＝＝＝
+        toolbar1 = QToolBar("File and View Toolbar")
+        toolbar1.setMovable(False)
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, toolbar1)
 
         # 1. ファイル操作
         open_action = QAction("📂 開く", self)
         open_action.triggered.connect(self.open_file)
-        toolbar.addAction(open_action)
+        toolbar1.addAction(open_action)
 
         save_action = QAction("💾 保存", self)
         save_action.triggered.connect(self.save_file)
-        toolbar.addAction(save_action)
+        toolbar1.addAction(save_action)
 
-        toolbar.addSeparator()
+        toolbar1.addSeparator()
+
+        # Undo/Redo
+        undo_action = QAction("↩️ 戻る", self)
+        undo_action.setShortcut("Ctrl+Z")
+        undo_action.triggered.connect(self.scene.undo)
+        toolbar1.addAction(undo_action)
+
+        redo_action = QAction("↪️ 進む", self)
+        redo_action.setShortcut("Ctrl+Y")
+        redo_action.triggered.connect(self.scene.redo)
+        toolbar1.addAction(redo_action)
+
+        toolbar1.addSeparator()
+
+        # ズーム操作
+        zoom_out_action = QAction("🔍- 縮小", self)
+        zoom_out_action.triggered.connect(self.zoom_out)
+        toolbar1.addAction(zoom_out_action)
+
+        zoom_in_action = QAction("🔍+ 拡大", self)
+        zoom_in_action.triggered.connect(self.zoom_in)
+        toolbar1.addAction(zoom_in_action)
+
+        zoom_reset_action = QAction("🔍 100%", self)
+        zoom_reset_action.triggered.connect(self.zoom_reset)
+        toolbar1.addAction(zoom_reset_action)
+
+        zoom_fit_action = QAction("🖥️ 画面に合わせる", self)
+        zoom_fit_action.triggered.connect(self.fit_to_view)
+        toolbar1.addAction(zoom_fit_action)
+
+        # 右端に寄せるためのスペーサー
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        toolbar1.addWidget(spacer)
+
+        # ページ遷移
+        self.prev_page_action = QAction("◀ 前ページ", self)
+        self.prev_page_action.triggered.connect(lambda: self.change_page(-1))
+        self.prev_page_action.setEnabled(False)
+        toolbar1.addAction(self.prev_page_action)
+
+        self.next_page_action = QAction("次ページ ▶", self)
+        self.next_page_action.triggered.connect(lambda: self.change_page(1))
+        self.next_page_action.setEnabled(False)
+        toolbar1.addAction(self.next_page_action)
+
+        # 改行を入れてツールバーを2段にする
+        self.addToolBarBreak(Qt.ToolBarArea.TopToolBarArea)
+
+        # ＝＝＝ 2段目のツールバー（描画ツール、色、太さ） ＝＝＝
+        toolbar2 = QToolBar("Draw Toolbar")
+        toolbar2.setMovable(False)
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, toolbar2)
 
         self.tool_actions = {}
         act_sel = QAction("↖️ 選択/移動", self)
         act_sel.setCheckable(True)
         act_sel.triggered.connect(lambda checked: self.set_tool("select"))
-        toolbar.addAction(act_sel)
+        toolbar2.addAction(act_sel)
         self.tool_actions["select"] = act_sel
 
-        toolbar.addSeparator()
+        toolbar2.addSeparator()
 
         act_line = QAction("📏 線", self)
         act_line.setCheckable(True)
         act_line.triggered.connect(lambda checked: self.set_tool("line"))
-        toolbar.addAction(act_line)
+        toolbar2.addAction(act_line)
         self.tool_actions["line"] = act_line
 
         self.line_combo = QComboBox(self)
         self.line_combo.addItems(["直線", "矢印", "曲線(フリーハンド)"])
         self.line_combo.currentIndexChanged.connect(self.change_line_type)
-        toolbar.addWidget(self.line_combo)
+        toolbar2.addWidget(self.line_combo)
 
         act_shape = QAction("🔲 図形", self)
         act_shape.setCheckable(True)
         act_shape.triggered.connect(lambda checked: self.set_tool("shape"))
-        toolbar.addAction(act_shape)
+        toolbar2.addAction(act_shape)
         self.tool_actions["shape"] = act_shape
 
         self.shape_combo = QComboBox(self)
         self.shape_combo.addItems(["四角", "丸/楕円", "三角"])
         self.shape_combo.currentIndexChanged.connect(self.change_shape_type)
-        toolbar.addWidget(self.shape_combo)
+        toolbar2.addWidget(self.shape_combo)
 
         act_text = QAction("🔤 文字", self)
         act_text.setCheckable(True)
         act_text.triggered.connect(lambda checked: self.set_tool("text"))
-        toolbar.addAction(act_text)
+        toolbar2.addAction(act_text)
         self.tool_actions["text"] = act_text
 
         self.tool_actions["select"].setChecked(True)
-        toolbar.addSeparator()
+        toolbar2.addSeparator()
 
-        # 追加: 削除ボタン
+        # 削除ボタン
         delete_action = QAction("🗑️ 削除", self)
+        delete_action.setShortcut("Del")
         delete_action.triggered.connect(self.scene.delete_selected_items)
-        toolbar.addAction(delete_action)
+        toolbar2.addAction(delete_action)
 
-        toolbar.addSeparator()
+        toolbar2.addSeparator()
 
-        color_action = QAction("🎨 色変更", self)
-        color_action.triggered.connect(self.choose_color)
-        toolbar.addAction(color_action)
+        # 色設定（線・枠色 / 文字色 / 背景・塗色）
+        pen_color_action = QAction("🖋️ 線/枠色", self)
+        pen_color_action.triggered.connect(self.choose_pen_color)
+        toolbar2.addAction(pen_color_action)
 
-        toolbar.addWidget(QLabel("🖊️ 太さ: "))
+        text_color_action = QAction("🔤 文字色", self)
+        text_color_action.triggered.connect(self.choose_text_color)
+        toolbar2.addAction(text_color_action)
+
+        brush_color_action = QAction("🪣 背景/塗色", self)
+        brush_color_action.triggered.connect(self.choose_brush_color)
+        toolbar2.addAction(brush_color_action)
+
+        self.fill_combo = QComboBox(self)
+        self.fill_combo.addItems(["透過 (枠のみ)", "塗りつぶし"])
+        self.fill_combo.currentIndexChanged.connect(self.change_fill_mode)
+        toolbar2.addWidget(self.fill_combo)
+
+        toolbar2.addWidget(QLabel("🖊️ 太さ: "))
         self.width_combo = QComboBox(self)
         self.width_combo.setEditable(True) 
         width_options = ["0.5", "1.0", "1.5", "2.0", "3.0", "4.0", "5.0", "6.0", "8.0", "10.0", "12.0", "15.0", "20.0", "30.0", "50.0"]
         self.width_combo.addItems(width_options)
         self.width_combo.setCurrentText(str(float(self.scene.pen_width)))
         self.width_combo.currentTextChanged.connect(self.change_pen_width_text)
-        toolbar.addWidget(self.width_combo)
+        toolbar2.addWidget(self.width_combo)
 
-        toolbar.addSeparator()
+    def set_tool(self, tool_id):
+        # 他のツールに切り替わるときに、未確定のプレビューテキストがあれば削除する
+        if tool_id != "text" and getattr(self.scene, 'pending_text_item', None):
+            self.scene.removeItem(self.scene.pending_text_item)
+            self.scene.pending_text_item = None
 
-        zoom_out_action = QAction("🔍- 縮小", self)
-        zoom_out_action.triggered.connect(self.zoom_out)
-        toolbar.addAction(zoom_out_action)
+        if tool_id == "text":
+            # 先にテキスト入力を受け付ける
+            text, ok = QInputDialog.getMultiLineText(self, "テキスト入力", "キャンバスに配置する文字を入力してください:")
+            if ok and text:
+                # プレビュー用のアイテムを仮生成してシーンに追加
+                font = QFont("Arial")
+                font.setPointSizeF(max(6.0, self.scene.pen_width * 3.0))
+                
+                brush = QBrush(self.scene.current_brush_color) if self.scene.use_fill else QBrush(Qt.BrushStyle.NoBrush)
+                pen = QPen(self.scene.current_pen_color)
+                pen.setWidthF(self.scene.pen_width)
+                if not self.scene.use_fill:
+                    pen = QPen(Qt.PenStyle.NoPen)
 
-        zoom_in_action = QAction("🔍+ 拡大", self)
-        zoom_in_action.triggered.connect(self.zoom_in)
-        toolbar.addAction(zoom_in_action)
+                text_item = CustomTextItem(text)
+                text_item.setFont(font)
+                text_item.setDefaultTextColor(self.scene.current_text_color)
+                text_item.setBrush(brush)
+                text_item.setPen(pen)
+                text_item.setZValue(self.scene.get_next_z_value())
+                
+                self.scene.addItem(text_item)
+                self.scene.pending_text_item = text_item
+            else:
+                # キャンセルされたら「選択ツール」に戻す
+                self.set_tool("select")
+                return
 
-        zoom_reset_action = QAction("🔍 100%", self)
-        zoom_reset_action.triggered.connect(self.zoom_reset)
-        toolbar.addAction(zoom_reset_action)
-
-        zoom_fit_action = QAction("🖥️ 画面に合わせる", self)
-        zoom_fit_action.triggered.connect(self.fit_to_view)
-        toolbar.addAction(zoom_fit_action)
-
-        spacer = QWidget()
-        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        toolbar.addWidget(spacer)
-
-        self.prev_page_action = QAction("◀ 前ページ", self)
-        self.prev_page_action.triggered.connect(lambda: self.change_page(-1))
-        self.prev_page_action.setEnabled(False)
-        toolbar.addAction(self.prev_page_action)
-
-        self.next_page_action = QAction("次ページ ▶", self)
-        self.next_page_action.triggered.connect(lambda: self.change_page(1))
-        self.next_page_action.setEnabled(False)
-        toolbar.addAction(self.next_page_action)
+        self.scene.current_tool = tool_id
+        for tid, action in self.tool_actions.items():
+            action.setChecked(tid == tool_id)
+            
+        if tool_id == "select":
+            self.view.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
+            self.view.viewport().setCursor(Qt.CursorShape.ArrowCursor)
+        else:
+            self.view.setDragMode(QGraphicsView.DragMode.NoDrag)
+            self.scene.clearSelection()
+            self.view.viewport().setCursor(Qt.CursorShape.CrossCursor)
 
     def change_line_type(self, index):
         line_types = ["line", "arrow", "freehand"]
@@ -924,51 +1209,119 @@ class AdvancedAnnotationApp(QMainWindow):
             return
 
         self.width_combo.blockSignals(True)
+        self.fill_combo.blockSignals(True)
 
-        if isinstance(item, (QGraphicsLineItem, QGraphicsRectItem, QGraphicsEllipseItem, QGraphicsPolygonItem, CustomPathItem)):
+        if isinstance(item, (CustomLineItem, ArrowItem, CustomRectItem, CustomEllipseItem, CustomPolygonItem, CustomPathItem)):
             pen = item.pen()
-            self.scene.current_color = pen.color()
+            self.scene.current_pen_color = pen.color()
             self.scene.pen_width = max(0.5, pen.widthF())
             self.width_combo.setCurrentText(str(self.scene.pen_width))
             
-        elif isinstance(item, QGraphicsTextItem):
-            self.scene.current_color = item.defaultTextColor()
-            font = item.font()
-            w = max(0.5, font.pointSizeF() / 3.0)
-            self.scene.pen_width = w
-            self.width_combo.setCurrentText(str(w))
+            if hasattr(item, 'brush'):
+                brush = item.brush()
+                if brush.style() != Qt.BrushStyle.NoBrush:
+                    self.scene.current_brush_color = brush.color()
+                    self.scene.use_fill = True
+                    self.fill_combo.setCurrentIndex(1)
+                else:
+                    self.scene.use_fill = False
+                    self.fill_combo.setCurrentIndex(0)
+            
+        elif isinstance(item, CustomTextItem):
+            self.scene.current_text_color = item.defaultTextColor()
+            pen = item.pen()
+            if pen.style() != Qt.PenStyle.NoPen:
+                self.scene.current_pen_color = pen.color()
+                self.scene.pen_width = max(0.5, pen.widthF())
+                self.width_combo.setCurrentText(str(self.scene.pen_width))
+            
+            brush = item.brush()
+            if brush.style() != Qt.BrushStyle.NoBrush:
+                self.scene.current_brush_color = brush.color()
+                self.scene.use_fill = True
+                self.fill_combo.setCurrentIndex(1)
+            else:
+                self.scene.use_fill = False
+                self.fill_combo.setCurrentIndex(0)
 
         self.width_combo.blockSignals(False)
+        self.fill_combo.blockSignals(False)
 
-    def set_tool(self, tool_id):
-        self.scene.current_tool = tool_id
-        for tid, action in self.tool_actions.items():
-            action.setChecked(tid == tool_id)
-            
-        if tool_id == "select":
-            self.view.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
-            self.view.viewport().setCursor(Qt.CursorShape.ArrowCursor)
-        else:
-            self.view.setDragMode(QGraphicsView.DragMode.NoDrag)
-            self.scene.clearSelection()
-            self.view.viewport().setCursor(Qt.CursorShape.CrossCursor)
-
-    def choose_color(self):
-        color = QColorDialog.getColor(self.scene.current_color, self)
+    def choose_pen_color(self):
+        """線や枠の色を変更"""
+        color = QColorDialog.getColor(self.scene.current_pen_color, self)
         if color.isValid():
-            self.scene.current_color = color
+            self.scene.current_pen_color = color
             changed = False
             for item in self.scene.selectedItems():
-                if isinstance(item, (QGraphicsLineItem, QGraphicsRectItem, QGraphicsEllipseItem, QGraphicsPolygonItem, CustomPathItem)):
+                if isinstance(item, (CustomLineItem, ArrowItem, CustomRectItem, CustomEllipseItem, CustomPolygonItem, CustomPathItem)):
                     pen = item.pen()
                     pen.setColor(color)
                     item.setPen(pen)
                     changed = True
-                elif isinstance(item, QGraphicsTextItem):
+                elif isinstance(item, CustomTextItem):
+                    if item.pen().style() != Qt.PenStyle.NoPen:
+                        pen = item.pen()
+                        pen.setColor(color)
+                        item.setPen(pen)
+                        changed = True
+            if changed:
+                self.scene.has_unsaved_changes = True
+                self.scene.save_state()
+
+    def choose_text_color(self):
+        """文字の色を変更"""
+        color = QColorDialog.getColor(self.scene.current_text_color, self)
+        if color.isValid():
+            self.scene.current_text_color = color
+            changed = False
+            for item in self.scene.selectedItems():
+                if isinstance(item, CustomTextItem):
                     item.setDefaultTextColor(color)
                     changed = True
             if changed:
                 self.scene.has_unsaved_changes = True
+                self.scene.save_state()
+
+    def choose_brush_color(self):
+        """背景や塗りつぶしの色を変更"""
+        color = QColorDialog.getColor(self.scene.current_brush_color, self)
+        if color.isValid():
+            self.scene.current_brush_color = color
+            changed = False
+            for item in self.scene.selectedItems():
+                if isinstance(item, (CustomRectItem, CustomEllipseItem, CustomPolygonItem, CustomPathItem, CustomTextItem)):
+                    if self.scene.use_fill:
+                        brush = QBrush(color)
+                        item.setBrush(brush)
+                        changed = True
+            if changed:
+                self.scene.has_unsaved_changes = True
+                self.scene.save_state()
+
+    def change_fill_mode(self, index):
+        """透過モードと塗りつぶしモードを切り替え"""
+        self.scene.use_fill = (index == 1)
+        changed = False
+        for item in self.scene.selectedItems():
+            if isinstance(item, (CustomRectItem, CustomEllipseItem, CustomPolygonItem, CustomPathItem)):
+                brush = QBrush(self.scene.current_brush_color) if self.scene.use_fill else QBrush(Qt.BrushStyle.NoBrush)
+                item.setBrush(brush)
+                changed = True
+            elif isinstance(item, CustomTextItem):
+                brush = QBrush(self.scene.current_brush_color) if self.scene.use_fill else QBrush(Qt.BrushStyle.NoBrush)
+                item.setBrush(brush)
+                if self.scene.use_fill:
+                    pen = QPen(self.scene.current_pen_color)
+                    pen.setWidthF(self.scene.pen_width)
+                    item.setPen(pen)
+                else:
+                    item.setPen(QPen(Qt.PenStyle.NoPen))
+                changed = True
+                
+        if changed:
+            self.scene.has_unsaved_changes = True
+            self.scene.save_state()
 
     def change_pen_width_text(self, text):
         try:
@@ -982,18 +1335,23 @@ class AdvancedAnnotationApp(QMainWindow):
         self.scene.pen_width = value
         changed = False
         for item in self.scene.selectedItems():
-            if isinstance(item, (QGraphicsLineItem, QGraphicsRectItem, QGraphicsEllipseItem, QGraphicsPolygonItem, CustomPathItem)):
+            if isinstance(item, (CustomLineItem, ArrowItem, CustomRectItem, CustomEllipseItem, CustomPolygonItem, CustomPathItem)):
                 pen = item.pen()
                 pen.setWidthF(value)
                 item.setPen(pen)
                 changed = True
-            elif isinstance(item, QGraphicsTextItem):
+            elif isinstance(item, CustomTextItem):
                 font = item.font()
                 font.setPointSizeF(max(6.0, value * 3.0))
                 item.setFont(font)
+                if item.pen().style() != Qt.PenStyle.NoPen:
+                    pen = item.pen()
+                    pen.setWidthF(value)
+                    item.setPen(pen)
                 changed = True
         if changed:
             self.scene.has_unsaved_changes = True
+            self.scene.save_state()
 
     def check_unsaved_changes(self):
         if self.scene.has_unsaved_changes:
@@ -1093,6 +1451,12 @@ class AdvancedAnnotationApp(QMainWindow):
             return
 
         try:
+            # プレビュー中の未確定テキストがあれば解除してから保存
+            if getattr(self.scene, 'pending_text_item', None):
+                self.scene.removeItem(self.scene.pending_text_item)
+                self.scene.pending_text_item = None
+                self.set_tool("select")
+
             # PDF保存ロジック（画像化してPDFに変換）
             if save_ext == ".pdf":
                 self.scene.clearSelection()
