@@ -34,7 +34,7 @@ jobs:
         --onefile 
         --noconsole 
         --clean 
-        --name "HandwrittenImageMiya-v1.1.0" 
+        --name "HandwrittenImageMiya-v1.2.0" 
         --add-data "readme.md;."
         --collect-all pymupdf 
         --hidden-import fitz 
@@ -48,5 +48,5 @@ jobs:
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: HandwrittenImageMiya-v1.1.0
-        path: dist/HandwrittenImageMiya-v1.1.0.exe
+        name: HandwrittenImageMiya-v1.2.0
+        path: dist/HandwrittenImageMiya-v1.2.0.exe
