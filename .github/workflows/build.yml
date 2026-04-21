@@ -35,6 +35,7 @@ jobs:
         --noconsole 
         --clean 
         --name "HandwrittenImageMiya-v1.3.0" 
+        --icon "icon.ico" 
         --add-data "readme.md;."
         --collect-all pymupdf 
         --hidden-import fitz 

@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import (
     QPixmap, QImage, QPainter, QPen, QColor, QPolygonF, QFont, QAction, QTransform,
-    QPainterPath, QPainterPathStroker, QImageReader, QBrush, QPalette
+    QPainterPath, QPainterPathStroker, QImageReader, QBrush, QPalette, QIcon
 )
 from PyQt6.QtCore import Qt, QPointF, QRectF, QLineF, QTimer
 
@@ -785,6 +785,11 @@ class AdvancedAnnotationApp(QMainWindow):
         super().__init__()
         self.setWindowTitle("HandwrittenImageMiya")
         self.setGeometry(100, 100, 1200, 800)
+        
+        # アイコンの設定
+        icon_path = resource_path("icon.ico")
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
         
         # 画面のスタイル（デザイン）を適用（初期状態はシステム設定に追従）
         self.is_dark = self.palette().color(QPalette.ColorRole.Window).lightness() < 128
