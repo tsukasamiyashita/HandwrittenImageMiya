@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import (
     QPixmap, QImage, QPainter, QPen, QColor, QPolygonF, QFont, QAction, QTransform,
-    QPainterPath, QPainterPathStroker, QImageReader, QBrush
+    QPainterPath, QPainterPathStroker, QImageReader, QBrush, QPalette
 )
 from PyQt6.QtCore import Qt, QPointF, QRectF, QLineF, QTimer
 
@@ -786,8 +786,9 @@ class AdvancedAnnotationApp(QMainWindow):
         self.setWindowTitle("HandwrittenImageMiya")
         self.setGeometry(100, 100, 1200, 800)
         
-        # 画面のスタイル（デザイン）を適用
-        self.apply_stylesheet()
+        # 画面のスタイル（デザイン）を適用（初期状態はシステム設定に追従）
+        self.is_dark = self.palette().color(QPalette.ColorRole.Window).lightness() < 128
+        self.apply_stylesheet(self.is_dark)
 
         self.scene = AnnotationScene(self)
         self.scene.selectionChanged.connect(self.sync_properties_from_selection)
@@ -807,130 +808,162 @@ class AdvancedAnnotationApp(QMainWindow):
         self.init_menubar()
         self.init_toolbar()
 
-    def apply_stylesheet(self):
-        """清潔感のあるモダン・ライトテーマ（コンパクトなボタンに対応）"""
-        style = """
-        QMainWindow {
-            background-color: #F5F6F7;
-        }
+    def apply_stylesheet(self, is_dark=False):
+        """テーマの適用（ライトモード・ダークモード対応、選択状態の視認性向上）"""
+        if is_dark:
+            # ダークモード用カラー
+            bg_main = "#1E1E1E"
+            bg_toolbar = "#2D2D2D"
+            bg_view = "#121212"
+            text_main = "#E0E0E0"
+            border_toolbar = "#3F3F3F"
+            selection_bg = "#0078D7"
+            selection_text = "#FFFFFF"
+            hover_bg = "#3D3D3D"
+            combo_bg = "#333333"
+            dialog_bg = "#252526"
+        else:
+            # 通常モード（ライト）用カラー
+            bg_main = "#F5F6F7"
+            bg_toolbar = "#FFFFFF"
+            bg_view = "#D0D7DE"
+            text_main = "#333333"
+            border_toolbar = "#D0D0D0"
+            selection_bg = "#005FB8" # 濃い目の青にして選択状態をはっきりさせる
+            selection_text = "#FFFFFF"
+            hover_bg = "#E9E9E9"
+            combo_bg = "#FFFFFF"
+            dialog_bg = "#F5F6F7"
+
+        style = f"""
+        QMainWindow {{
+            background-color: {bg_main};
+        }}
         /* メニューバー */
-        QMenuBar {
-            background-color: #FFFFFF;
-            border-bottom: 1px solid #E0E0E0;
+        QMenuBar {{
+            background-color: {bg_toolbar};
+            border-bottom: 1px solid {border_toolbar};
             font-size: 13px;
-            color: #333333;
-        }
-        QMenuBar::item {
+            color: {text_main};
+        }}
+        QMenuBar::item {{
             background-color: transparent;
             padding: 6px 12px;
-        }
-        QMenuBar::item:selected {
-            background-color: #E5F3FF;
-            color: #0066CC;
-        }
-        QMenu {
-            background-color: #FFFFFF;
-            color: #333333;
-            border: 1px solid #CCCCCC;
+        }}
+        QMenuBar::item:selected {{
+            background-color: {selection_bg};
+            color: {selection_text};
+        }}
+        QMenu {{
+            background-color: {bg_toolbar};
+            color: {text_main};
+            border: 1px solid {border_toolbar};
             font-size: 13px;
-        }
-        QMenu::item {
+        }}
+        QMenu::item {{
             padding: 6px 25px 6px 20px;
-        }
-        QMenu::item:selected {
-            background-color: #E5F3FF;
-            color: #0066CC;
-        }
+        }}
+        QMenu::item:selected {{
+            background-color: {selection_bg};
+            color: {selection_text};
+        }}
         /* ツールバー */
-        QToolBar {
-            background-color: #FFFFFF;
-            border-bottom: 1px solid #D0D0D0;
+        QToolBar {{
+            background-color: {bg_toolbar};
+            border-bottom: 1px solid {border_toolbar};
             spacing: 4px;
             padding: 4px;
-        }
-        /* ツールバーのボタン（コンパクト化） */
-        QToolButton {
-            color: #333333;
+        }}
+        /* ツールバーのボタン（選択状態を強調） */
+        QToolButton {{
+            color: {text_main};
             font-size: 12px;
             border: 1px solid transparent;
             border-radius: 4px;
             padding: 4px 8px;
             min-height: 20px;
-        }
-        QToolButton:hover {
-            background-color: #F0F0F0;
-            border: 1px solid #CCCCCC;
-        }
-        QToolButton:checked {
-            background-color: #E5F3FF;
-            border: 1px solid #0078D7;
-            color: #005A9E;
+            background-color: transparent;
+        }}
+        QToolButton:hover {{
+            background-color: {hover_bg};
+            border: 1px solid {border_toolbar};
+        }}
+        QToolButton:checked {{
+            background-color: {selection_bg};
+            border: 1px solid {selection_bg};
+            color: {selection_text};
             font-weight: bold;
-        }
-        /* コンボボックス（リストダウンボタンのコンパクト化） */
-        QComboBox {
-            border: 1px solid #CCCCCC;
+        }}
+        /* コンボボックス */
+        QComboBox {{
+            border: 1px solid {border_toolbar};
             border-radius: 4px;
             padding: 2px 8px;
-            background-color: #FFFFFF;
-            color: #333333;
+            background-color: {combo_bg};
+            color: {text_main};
             font-size: 12px;
             min-height: 20px;
             min-width: 80px;
-        }
-        QComboBox:hover, QComboBox:focus {
-            border: 1px solid #0078D7;
-        }
-        /* ツールバー内のラベル（太さ：など）限定にしてダイアログの文字に影響させない */
-        QToolBar QLabel {
-            color: #444444;
+        }}
+        QComboBox:hover, QComboBox:focus {{
+            border: 1px solid {selection_bg};
+        }}
+        /* ツールバー内のラベル */
+        QToolBar QLabel {{
+            color: {text_main};
             font-weight: bold;
             padding-left: 4px;
             font-size: 12px;
-        }
+        }}
         /* 画像表示エリア（キャンバスの外側） */
-        QGraphicsView {
-            background-color: #D9E1E8;
+        QGraphicsView {{
+            background-color: {bg_view};
             border: none;
-        }
-        /* ダイアログ全般（QMessageBox, Readme等） */
-        QDialog, QMessageBox {
-            background-color: #F5F6F7;
-            color: #333333;
-        }
-        /* ダイアログ内のテキスト等 */
-        QMessageBox QLabel {
-            color: #333333;
+        }}
+        /* ダイアログ全般 */
+        QDialog, QMessageBox {{
+            background-color: {dialog_bg};
+            color: {text_main};
+        }}
+        QMessageBox QLabel {{
+            color: {text_main};
             font-size: 13px;
             font-weight: normal;
-        }
-        /* ダイアログ等の標準ボタン */
-        QPushButton {
-            background-color: #FFFFFF;
-            color: #333333;
-            border: 1px solid #CCCCCC;
+        }}
+        QPushButton {{
+            background-color: {combo_bg};
+            color: {text_main};
+            border: 1px solid {border_toolbar};
             border-radius: 4px;
             padding: 6px 20px;
             min-width: 60px;
             font-size: 13px;
-        }
-        QPushButton:hover {
-            background-color: #E5F3FF;
-            border: 1px solid #0078D7;
-        }
-        QPushButton:pressed {
-            background-color: #CCE4F7;
-        }
-        /* Readme用のテキストエリア */
-        QTextEdit {
-            background-color: #FFFFFF;
-            border: 1px solid #CCCCCC;
+        }}
+        QPushButton:hover {{
+            background-color: {selection_bg};
+            color: {selection_text};
+            border: 1px solid {selection_bg};
+        }}
+        QPushButton:pressed {{
+            background-color: {hover_bg};
+        }}
+        QTextEdit {{
+            background-color: {combo_bg};
+            border: 1px solid {border_toolbar};
             border-radius: 4px;
             padding: 8px;
-            color: #333333;
-        }
+            color: {text_main};
+        }}
         """
         self.setStyleSheet(style)
+
+    def toggle_theme(self):
+        """通常モード（ライト）とダークモードを切り替える"""
+        self.is_dark = not self.is_dark
+        self.apply_stylesheet(self.is_dark)
+        # アイコンを更新
+        self.theme_action.setText("🌙" if not self.is_dark else "☀️")
+
 
     def init_menubar(self):
         """メニューバーを構築し、ヘルプメニューを追加する"""
@@ -980,7 +1013,7 @@ class AdvancedAnnotationApp(QMainWindow):
     def show_version_info(self):
         """バージョン情報をメッセージボックスで表示する"""
         title = "HandwrittenImageMiya"
-        version = "v1.2.0"
+        version = "v1.3.0"
         msg = f"{title}\nバージョン: {version}\n\nPyQt6ベースの高機能アノテーションツール"
         QMessageBox.about(self, "バージョン情報", msg)
 
@@ -1046,6 +1079,13 @@ class AdvancedAnnotationApp(QMainWindow):
         self.next_page_action.triggered.connect(lambda: self.change_page(1))
         self.next_page_action.setEnabled(False)
         toolbar1.addAction(self.next_page_action)
+
+        toolbar1.addSeparator()
+
+        # テーマ切り替えボタン
+        self.theme_action = QAction("🌙" if not self.is_dark else "☀️", self)
+        self.theme_action.triggered.connect(self.toggle_theme)
+        toolbar1.addAction(self.theme_action)
 
         # 改行を入れてツールバーを2段にする
         self.addToolBarBreak(Qt.ToolBarArea.TopToolBarArea)

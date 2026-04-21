@@ -34,12 +34,12 @@ jobs:
         --onefile 
         --noconsole 
         --clean 
-        --name "HandwrittenImageMiya-v1.2.0" 
+        --name "HandwrittenImageMiya-v1.3.0" 
         --add-data "readme.md;."
         --collect-all pymupdf 
         --hidden-import fitz 
-        --hidden-import PyQt6 
-        app.pyw
+        --hidden-import PyQt6 \
+        app.py
 
     # 完成したexeファイルをGitHub上にアップロード
 
@@ -48,5 +48,5 @@ jobs:
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: HandwrittenImageMiya-v1.2.0
-        path: dist/HandwrittenImageMiya-v1.2.0.exe
+        name: HandwrittenImageMiya-v1.3.0
+        path: dist/HandwrittenImageMiya-v1.3.0.exe
