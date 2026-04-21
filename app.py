@@ -804,6 +804,7 @@ class AdvancedAnnotationApp(QMainWindow):
         self.current_filename = "" 
         self.current_dir = "" 
         self.current_ext = "" 
+        self.current_file_path = "" # 現在開いている、または保存済みのファイルのフルパス
 
         self.init_menubar()
         self.init_toolbar()
@@ -1024,13 +1025,20 @@ class AdvancedAnnotationApp(QMainWindow):
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, toolbar1)
 
         # 1. ファイル操作
-        open_action = QAction("📂 開く", self)
-        open_action.triggered.connect(self.open_file)
-        toolbar1.addAction(open_action)
-
         save_action = QAction("💾 保存", self)
+        save_action.setShortcut("Ctrl+S")
         save_action.triggered.connect(self.save_file)
         toolbar1.addAction(save_action)
+
+        save_as_action = QAction("💾 名前を付けて保存", self)
+        save_as_action.setShortcut("Ctrl+Shift+S")
+        save_as_action.triggered.connect(self.save_file_as)
+        toolbar1.addAction(save_as_action)
+
+        open_action = QAction("📂 開く", self)
+        open_action.setShortcut("Ctrl+O")
+        open_action.triggered.connect(self.open_file)
+        toolbar1.addAction(open_action)
 
         toolbar1.addSeparator()
 
@@ -1414,6 +1422,7 @@ class AdvancedAnnotationApp(QMainWindow):
         if not file_path:
             return
 
+        self.current_file_path = file_path
         self.current_dir = os.path.dirname(file_path)
         self.current_filename = os.path.splitext(os.path.basename(file_path))[0]
         self.current_ext = os.path.splitext(file_path)[1].lower()
@@ -1460,14 +1469,25 @@ class AdvancedAnnotationApp(QMainWindow):
                 self.load_pdf_page()
 
     def save_file(self):
-        # 元の拡張子をそのままデフォルト設定にする
+        """上書き保存（パスがない場合は新規保存へ）"""
+        if not self.current_file_path or self.current_ext == ".pdf":
+            # PDFからの書き出し、または新規の場合はダイアログを出す
+            return self.save_file_as()
+        
+        # 上書き保存の実行
+        self.perform_actual_save(self.current_file_path)
+
+    def save_file_as(self):
+        """名前を付けて保存"""
         default_ext = self.current_ext
         if not default_ext: default_ext = ".jpg"
         
         initial_name = f"{self.current_filename}_After{default_ext}"
+        if not self.current_filename:
+            initial_name = f"untitled{default_ext}"
+
         initial_path = os.path.join(self.current_dir, initial_name) if self.current_dir else initial_name
         
-        # フィルター文字列の作成
         if default_ext == ".png":
             filter_str = "PNG Image (*.png);;JPEG Image (*.jpg);;PDF Document (*.pdf)"
         elif default_ext == ".pdf":
@@ -1478,26 +1498,27 @@ class AdvancedAnnotationApp(QMainWindow):
             filter_str = "JPEG Image (*.jpg);;PNG Image (*.png);;PDF Document (*.pdf)"
         
         file_path, selected_filter = QFileDialog.getSaveFileName(
-            self, "保存", initial_path, filter_str
+            self, "名前を付けて保存", initial_path, filter_str
         )
         if not file_path:
             return
 
-        save_ext = os.path.splitext(file_path)[1].lower()
+        self.perform_actual_save(file_path)
 
+    def perform_actual_save(self, file_path):
+        """指定されたパスに実際に保存処理を行う"""
+        save_ext = os.path.splitext(file_path)[1].lower()
         rect = self.scene.sceneRect()
         if rect.isEmpty() or rect.width() <= 0 or rect.height() <= 0:
             QMessageBox.warning(self, "エラー", "保存する内容がありません（画面サイズが無効です）。")
             return
 
         try:
-            # プレビュー中の未確定テキストがあれば解除してから保存
             if getattr(self.scene, 'pending_text_item', None):
                 self.scene.removeItem(self.scene.pending_text_item)
                 self.scene.pending_text_item = None
                 self.set_tool("select")
 
-            # PDF保存ロジック（画像化してPDFに変換）
             if save_ext == ".pdf":
                 self.scene.clearSelection()
                 image = QImage(int(rect.width()), int(rect.height()), QImage.Format.Format_ARGB32)
@@ -1507,7 +1528,6 @@ class AdvancedAnnotationApp(QMainWindow):
                 self.scene.render(painter)
                 painter.end()
                 
-                # 一時ファイルを経由してPDF化 (権限エラー回避のためtempfileを使用)
                 temp_img = os.path.join(tempfile.gettempdir(), "temp_save_anno.jpg")
                 image.save(temp_img, "JPEG", 95)
                 
@@ -1516,7 +1536,6 @@ class AdvancedAnnotationApp(QMainWindow):
                 pdfbytes = imgdoc.convert_to_pdf()
                 imgdoc.close()
                 
-                # ★ C++側のガベージコレクション問題を回避するため変数に保持して渡す
                 pdf_stream = fitz.open("pdf", pdfbytes)
                 doc.insert_pdf(pdf_stream)
                 doc.save(file_path)
@@ -1526,10 +1545,10 @@ class AdvancedAnnotationApp(QMainWindow):
                 if os.path.exists(temp_img): os.remove(temp_img)
                 
                 self.scene.has_unsaved_changes = False
+                self.current_file_path = file_path
                 self.show_auto_close_message("完了", "PDFとして保存しました。")
                 return
 
-            # 画像保存ロジック
             self.scene.clearSelection()
             image = QImage(int(rect.width()), int(rect.height()), QImage.Format.Format_ARGB32)
             image.fill(Qt.GlobalColor.transparent)
@@ -1540,13 +1559,13 @@ class AdvancedAnnotationApp(QMainWindow):
 
             if image.save(file_path):
                 self.scene.has_unsaved_changes = False
+                self.current_file_path = file_path
                 self.current_dir = os.path.dirname(file_path)
                 self.show_auto_close_message("完了", f"{save_ext.upper()}として保存しました。")
             else:
                 QMessageBox.warning(self, "エラー", "保存に失敗しました。")
                 
         except Exception as e:
-            # 予期せぬエラーでもアプリが落ちないようにする
             QMessageBox.critical(self, "致命的なエラー", f"保存処理中にエラーが発生しました。\n{e}")
 
     def show_auto_close_message(self, title, text):
