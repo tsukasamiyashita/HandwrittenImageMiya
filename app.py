@@ -174,11 +174,10 @@ class CustomPixmapItem(QGraphicsItem):
         painter.drawPixmap(self._rect, self.original_pixmap, QRectF(self.original_pixmap.rect()))
 
     def shape(self):
+        """画像の内側でも判定できるように矩形全体をパスとする"""
         path = QPainterPath()
         path.addRect(self._rect)
-        stroker = QPainterPathStroker()
-        stroker.setWidth(30.0)
-        return stroker.createStroke(path)
+        return path
 
 
 class AnnotationScene(QGraphicsScene):
