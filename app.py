@@ -151,6 +151,36 @@ class CustomTextItem(QGraphicsTextItem):
         super().paint(painter, option, widget)
 
 
+class CustomPixmapItem(QGraphicsItem):
+    """注釈として挿入された画像アイテム"""
+    def __init__(self, pixmap, rect, parent=None):
+        super().__init__(parent)
+        self.original_pixmap = pixmap
+        self._rect = rect
+        self.setFlags(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable | QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
+
+    def boundingRect(self):
+        return self._rect
+
+    def setRect(self, rect):
+        self.prepareGeometryChange()
+        self._rect = rect
+        self.update()
+
+    def rect(self):
+        return self._rect
+
+    def paint(self, painter, option, widget=None):
+        painter.drawPixmap(self._rect, self.original_pixmap, QRectF(self.original_pixmap.rect()))
+
+    def shape(self):
+        path = QPainterPath()
+        path.addRect(self._rect)
+        stroker = QPainterPathStroker()
+        stroker.setWidth(30.0)
+        return stroker.createStroke(path)
+
+
 class AnnotationScene(QGraphicsScene):
     """画像と注釈を管理するシーン"""
     def __init__(self, parent=None):
@@ -232,6 +262,8 @@ class AnnotationScene(QGraphicsScene):
                     'pen': QPen(item.pen()), 'brush': QBrush(item.brush()),
                     'scale': item.scale(), 'pos': item.pos()
                 })
+            elif isinstance(item, CustomPixmapItem):
+                state.append({'type': 'pixmap', 'pixmap': item.original_pixmap, 'rect': item.rect(), 'pos': item.pos()})
         return list(reversed(state))
 
     def restore_scene_state(self, state):
@@ -268,6 +300,8 @@ class AnnotationScene(QGraphicsScene):
                 new_item.setPen(data.get('pen', QPen(Qt.PenStyle.NoPen)))
                 new_item.setBrush(data.get('brush', QBrush(Qt.BrushStyle.NoBrush)))
                 new_item.setScale(data['scale'])
+            elif item_type == 'pixmap':
+                new_item = CustomPixmapItem(data['pixmap'], data['rect'])
             
             if new_item:
                 new_item.setZValue(float(i + 1))
@@ -323,7 +357,7 @@ class AnnotationScene(QGraphicsScene):
             if item == self.bg_item or item == self.pending_text_item:
                 continue
 
-            if isinstance(item, (QGraphicsRectItem, QGraphicsEllipseItem)):
+            if isinstance(item, (QGraphicsRectItem, QGraphicsEllipseItem, CustomPixmapItem)):
                 br = item.mapToScene(item.rect().bottomRight())
                 painter.drawRect(QRectF(br.x() - handle_size/2, br.y() - handle_size/2, handle_size, handle_size))
             elif isinstance(item, QGraphicsPolygonItem):
@@ -376,7 +410,7 @@ class AnnotationScene(QGraphicsScene):
                 if item == self.bg_item:
                     continue
                 
-                if isinstance(item, (QGraphicsRectItem, QGraphicsEllipseItem)):
+                if isinstance(item, (QGraphicsRectItem, QGraphicsEllipseItem, CustomPixmapItem)):
                     br = item.mapToScene(item.rect().bottomRight())
                     if (pos - br).manhattanLength() < handle_area:
                         self.resizing_item = item
@@ -483,7 +517,7 @@ class AnnotationScene(QGraphicsScene):
                     if item == self.bg_item:
                         continue
                     
-                    if isinstance(item, (QGraphicsRectItem, QGraphicsEllipseItem)):
+                    if isinstance(item, (QGraphicsRectItem, QGraphicsEllipseItem, CustomPixmapItem)):
                         br = item.mapToScene(item.rect().bottomRight())
                         if (pos - br).manhattanLength() < handle_area:
                             on_handle = True
@@ -531,7 +565,7 @@ class AnnotationScene(QGraphicsScene):
 
                 if self.resize_mode == "shape_br":
                     rect = QRectF(self.shape_anchor, local_pos).normalized()
-                    if isinstance(item, (QGraphicsRectItem, QGraphicsEllipseItem)):
+                    if isinstance(item, (QGraphicsRectItem, QGraphicsEllipseItem, CustomPixmapItem)):
                         item.setRect(rect)
                     elif isinstance(item, QGraphicsPolygonItem):
                         p1 = QPointF(rect.center().x(), rect.top())
@@ -707,6 +741,8 @@ class AnnotationScene(QGraphicsScene):
                 'pen': QPen(item.pen()), 'brush': QBrush(item.brush()),
                 'scale': item.scale()
             }
+        elif isinstance(item, CustomPixmapItem):
+            self.copied_data = {'type': 'pixmap', 'pixmap': item.original_pixmap, 'rect': item.rect()}
         else:
             self.copied_data = None
 
@@ -762,6 +798,11 @@ class AnnotationScene(QGraphicsScene):
             new_item.setBrush(data.get('brush', QBrush(Qt.BrushStyle.NoBrush)))
             new_item.setPos(pos)
             new_item.setScale(data['scale'])
+
+        elif item_type == 'pixmap':
+            old_rect = data['rect']
+            new_rect = QRectF(pos.x(), pos.y(), old_rect.width(), old_rect.height())
+            new_item = CustomPixmapItem(data['pixmap'], new_rect)
 
         if new_item:
             new_item.setZValue(self.get_next_z_value())
@@ -1145,6 +1186,11 @@ class AdvancedAnnotationApp(QMainWindow):
         toolbar2.addAction(act_text)
         self.tool_actions["text"] = act_text
 
+        # ＝＝＝ 画像挿入アクション（新規追加） ＝＝＝
+        act_insert_img = QAction("🖼️ 画像挿入", self)
+        act_insert_img.triggered.connect(self.insert_image)
+        toolbar2.addAction(act_insert_img)
+
         self.tool_actions["select"].setChecked(True)
         toolbar2.addSeparator()
 
@@ -1174,7 +1220,7 @@ class AdvancedAnnotationApp(QMainWindow):
         self.fill_combo.currentIndexChanged.connect(self.change_fill_mode)
         toolbar2.addWidget(self.fill_combo)
 
-        toolbar2.addWidget(QLabel("🖊️ 太さ: "))
+        toolbar2.addWidget(QLabel("🖊️ サイズ: "))
         self.width_combo = QComboBox(self)
         self.width_combo.setEditable(True) 
         width_options = ["0.5", "1.0", "1.5", "2.0", "3.0", "4.0", "5.0", "6.0", "8.0", "10.0", "12.0", "15.0", "20.0", "30.0", "50.0"]
@@ -1472,6 +1518,76 @@ class AdvancedAnnotationApp(QMainWindow):
             if 0 <= new_page < len(self.current_pdf_doc):
                 self.current_pdf_page = new_page
                 self.load_pdf_page()
+
+    def insert_image(self):
+        """外部画像またはPDFページを注釈としてキャンバスの中に挿入する"""
+        default_dir = self.current_dir if self.current_dir else os.path.expanduser("~")
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "挿入する画像またはPDFを選択", default_dir, "Images/PDF (*.png *.jpg *.jpeg *.pdf)"
+        )
+        if not file_path:
+            return
+
+        ext = os.path.splitext(file_path)[1].lower()
+        pixmap = None
+
+        try:
+            if ext == ".pdf":
+                doc = fitz.open(file_path)
+                if len(doc) > 0:
+                    page_num = 0
+                    if len(doc) > 1:
+                        val, ok = QInputDialog.getInt(
+                            self, "ページ選択", f"挿入するPDFのページ番号を入力してください (1-{len(doc)}):", 
+                            1, 1, len(doc), 1
+                        )
+                        if ok:
+                            page_num = val - 1
+                        else:
+                            doc.close()
+                            return
+                    page = doc.load_page(page_num)
+                    pix = page.get_pixmap(alpha=False)
+                    fmt = QImage.Format.Format_RGB888
+                    qimg = QImage(pix.samples, pix.width, pix.height, pix.stride, fmt)
+                    pixmap = QPixmap.fromImage(qimg)
+                doc.close()
+            else:
+                reader = QImageReader(file_path)
+                reader.setAutoTransform(True)
+                image = reader.read()
+                if not image.isNull():
+                    pixmap = QPixmap.fromImage(image)
+
+            if pixmap and not pixmap.isNull():
+                view_rect = self.view.viewport().rect()
+                scene_center = self.view.mapToScene(view_rect.center())
+                
+                # 初期配置時のサイズ決定（キャンバスを邪魔しないよう縮小スケーリング）
+                w = float(pixmap.width())
+                h = float(pixmap.height())
+                max_size = 300.0
+                if w > max_size or h > max_size:
+                    ratio = min(max_size / w, max_size / h)
+                    w *= ratio
+                    h *= ratio
+                
+                rect = QRectF(-w / 2, -h / 2, w, h)
+                item = CustomPixmapItem(pixmap, rect)
+                item.setPos(scene_center)
+                item.setZValue(self.scene.get_next_z_value())
+                self.scene.addItem(item)
+                
+                self.scene.clearSelection()
+                item.setSelected(True)
+                
+                self.scene.has_unsaved_changes = True
+                self.scene.save_state()
+                self.set_tool("select") # 挿入後は自動的に移動可能な選択モードに戻る
+            else:
+                QMessageBox.warning(self, "エラー", "ファイルの読み込みに失敗しました。")
+        except Exception as e:
+            QMessageBox.critical(self, "エラー", f"画像の挿入中にエラーが発生しました。\n{e}")
 
     def save_file(self):
         """上書き保存（パスがない場合は新規保存へ）"""
