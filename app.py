@@ -208,6 +208,7 @@ class AnnotationScene(QGraphicsScene):
         self.shape_anchor = None
         self.initial_path = None
         self.initial_rect = None
+        self.start_scene_rect = None
         
         self.current_path = None
         self.copied_data = None
@@ -356,9 +357,23 @@ class AnnotationScene(QGraphicsScene):
             if item == self.bg_item or item == self.pending_text_item:
                 continue
 
-            if isinstance(item, (QGraphicsRectItem, QGraphicsEllipseItem, CustomPixmapItem)):
+            if isinstance(item, (QGraphicsRectItem, QGraphicsEllipseItem)):
                 br = item.mapToScene(item.rect().bottomRight())
                 painter.drawRect(QRectF(br.x() - handle_size/2, br.y() - handle_size/2, handle_size, handle_size))
+            elif isinstance(item, CustomPixmapItem):
+                local_rect = item.rect()
+                # 四つ角と四辺の合計8箇所にリサイズハンドルを描画
+                handles = [
+                    local_rect.topLeft(), local_rect.topRight(),
+                    local_rect.bottomLeft(), local_rect.bottomRight(),
+                    QPointF(local_rect.center().x(), local_rect.top()),
+                    QPointF(local_rect.center().x(), local_rect.bottom()),
+                    QPointF(local_rect.left(), local_rect.center().y()),
+                    QPointF(local_rect.right(), local_rect.center().y())
+                ]
+                for local_pt in handles:
+                    pt = item.mapToScene(local_pt)
+                    painter.drawRect(QRectF(pt.x() - handle_size/2, pt.y() - handle_size/2, handle_size, handle_size))
             elif isinstance(item, QGraphicsPolygonItem):
                 br = item.mapToScene(item.boundingRect().bottomRight())
                 painter.drawRect(QRectF(br.x() - handle_size/2, br.y() - handle_size/2, handle_size, handle_size))
@@ -409,7 +424,28 @@ class AnnotationScene(QGraphicsScene):
                 if item == self.bg_item:
                     continue
                 
-                if isinstance(item, (QGraphicsRectItem, QGraphicsEllipseItem, CustomPixmapItem)):
+                if isinstance(item, CustomPixmapItem):
+                    local_rect = item.rect()
+                    # 8方向の各ハンドルとマウスカーソルとのヒットテスト
+                    handles = {
+                        "top_left": local_rect.topLeft(),
+                        "top_right": local_rect.topRight(),
+                        "bottom_left": local_rect.bottomLeft(),
+                        "bottom_right": local_rect.bottomRight(),
+                        "top": QPointF(local_rect.center().x(), local_rect.top()),
+                        "bottom": QPointF(local_rect.center().x(), local_rect.bottom()),
+                        "left": QPointF(local_rect.left(), local_rect.center().y()),
+                        "right": QPointF(local_rect.right(), local_rect.center().y())
+                    }
+                    for name, local_pt in handles.items():
+                        pt = item.mapToScene(local_pt)
+                        if (pos - pt).manhattanLength() < handle_area:
+                            self.resizing_item = item
+                            self.resize_mode = f"pixmap_{name}"
+                            self.start_scene_rect = item.rect().translated(item.pos())
+                            event.accept()
+                            return
+                elif isinstance(item, (QGraphicsRectItem, QGraphicsEllipseItem)):
                     br = item.mapToScene(item.rect().bottomRight())
                     if (pos - br).manhattanLength() < handle_area:
                         self.resizing_item = item
@@ -516,7 +552,27 @@ class AnnotationScene(QGraphicsScene):
                     if item == self.bg_item:
                         continue
                     
-                    if isinstance(item, (QGraphicsRectItem, QGraphicsEllipseItem, CustomPixmapItem)):
+                    if isinstance(item, CustomPixmapItem):
+                        local_rect = item.rect()
+                        handles = {
+                            "top_left": (local_rect.topLeft(), Qt.CursorShape.SizeFDiagCursor),
+                            "bottom_right": (local_rect.bottomRight(), Qt.CursorShape.SizeFDiagCursor),
+                            "top_right": (local_rect.topRight(), Qt.CursorShape.SizeBDiagCursor),
+                            "bottom_left": (local_rect.bottomLeft(), Qt.CursorShape.SizeBDiagCursor),
+                            "top": (QPointF(local_rect.center().x(), local_rect.top()), Qt.CursorShape.SizeVerCursor),
+                            "bottom": (QPointF(local_rect.center().x(), local_rect.bottom()), Qt.CursorShape.SizeVerCursor),
+                            "left": (QPointF(local_rect.left(), local_rect.center().y()), Qt.CursorShape.SizeHorCursor),
+                            "right": (QPointF(local_rect.right(), local_rect.center().y()), Qt.CursorShape.SizeHorCursor)
+                        }
+                        for name, (local_pt, cursor) in handles.items():
+                            pt = item.mapToScene(local_pt)
+                            if (pos - pt).manhattanLength() < handle_area:
+                                on_handle = True
+                                cursor_shape = cursor
+                                break
+                        if on_handle:
+                            break
+                    elif isinstance(item, (QGraphicsRectItem, QGraphicsEllipseItem)):
                         br = item.mapToScene(item.rect().bottomRight())
                         if (pos - br).manhattanLength() < handle_area:
                             on_handle = True
@@ -562,9 +618,75 @@ class AnnotationScene(QGraphicsScene):
                 item = self.resizing_item
                 local_pos = item.mapFromScene(pos)
 
-                if self.resize_mode == "shape_br":
+                if self.resize_mode.startswith("pixmap_"):
+                    mode = self.resize_mode.replace("pixmap_", "")
+                    start_rect = self.start_scene_rect
+                    # 初期ドラッグ開始時点のアスペクト比を計算
+                    r = start_rect.width() / max(1.0, start_rect.height())
+
+                    # 1. 四つ角ドラッグの場合：アスペクト比を固定してリサイズ
+                    if mode == "bottom_right":
+                        anchor = start_rect.topLeft()
+                        dx = pos.x() - anchor.x()
+                        dy = pos.y() - anchor.y()
+                        sign_x = 1 if dx >= 0 else -1
+                        sign_y = 1 if dy >= 0 else -1
+                        val = max(abs(dx), abs(dy) * r)
+                        new_w = sign_x * val
+                        new_h = sign_y * val / r
+                        new_scene_rect = QRectF(anchor.x(), anchor.y(), new_w, new_h).normalized()
+                    elif mode == "top_left":
+                        anchor = start_rect.bottomRight()
+                        dx = anchor.x() - pos.x()
+                        dy = anchor.y() - pos.y()
+                        sign_x = 1 if dx >= 0 else -1
+                        sign_y = 1 if dy >= 0 else -1
+                        val = max(abs(dx), abs(dy) * r)
+                        new_w = sign_x * val
+                        new_h = sign_y * val / r
+                        new_scene_rect = QRectF(anchor.x() - new_w, anchor.y() - new_h, new_w, new_h).normalized()
+                    elif mode == "top_right":
+                        anchor = start_rect.bottomLeft()
+                        dx = pos.x() - anchor.x()
+                        dy = anchor.y() - pos.y()
+                        sign_x = 1 if dx >= 0 else -1
+                        sign_y = 1 if dy >= 0 else -1
+                        val = max(abs(dx), abs(dy) * r)
+                        new_w = sign_x * val
+                        new_h = sign_y * val / r
+                        new_scene_rect = QRectF(anchor.x(), anchor.y() - new_h, new_w, new_h).normalized()
+                    elif mode == "bottom_left":
+                        anchor = start_rect.topRight()
+                        dx = anchor.x() - pos.x()
+                        dy = pos.y() - anchor.y()
+                        sign_x = 1 if dx >= 0 else -1
+                        sign_y = 1 if dy >= 0 else -1
+                        val = max(abs(dx), abs(dy) * r)
+                        new_w = sign_x * val
+                        new_h = sign_y * val / r
+                        new_scene_rect = QRectF(anchor.x() - new_w, anchor.y(), new_w, new_h).normalized()
+                    
+                    # 2. 四辺ドラッグの場合：対応する軸の比率を自由に変更
+                    elif mode == "right":
+                        new_w = pos.x() - start_rect.left()
+                        new_scene_rect = QRectF(start_rect.left(), start_rect.top(), new_w, start_rect.height()).normalized()
+                    elif mode == "left":
+                        new_w = start_rect.right() - pos.x()
+                        new_scene_rect = QRectF(pos.x(), start_rect.top(), new_w, start_rect.height()).normalized()
+                    elif mode == "bottom":
+                        new_h = pos.y() - start_rect.top()
+                        new_scene_rect = QRectF(start_rect.left(), start_rect.top(), start_rect.width(), new_h).normalized()
+                    elif mode == "top":
+                        new_h = start_rect.bottom() - pos.y()
+                        new_scene_rect = QRectF(start_rect.left(), pos.y(), start_rect.width(), new_h).normalized()
+
+                    # 新しいシーン座標系での矩形をオブジェクトに反映
+                    item.setPos(new_scene_rect.topLeft())
+                    item.setRect(QRectF(0, 0, new_scene_rect.width(), new_scene_rect.height()))
+
+                elif self.resize_mode == "shape_br":
                     rect = QRectF(self.shape_anchor, local_pos).normalized()
-                    if isinstance(item, (QGraphicsRectItem, QGraphicsEllipseItem, CustomPixmapItem)):
+                    if isinstance(item, (QGraphicsRectItem, QGraphicsEllipseItem)):
                         item.setRect(rect)
                     elif isinstance(item, QGraphicsPolygonItem):
                         p1 = QPointF(rect.center().x(), rect.top())
@@ -648,6 +770,7 @@ class AnnotationScene(QGraphicsScene):
                 self.shape_anchor = None
                 self.initial_path = None
                 self.initial_rect = None
+                self.start_scene_rect = None
                 event.accept()
                 return
             super().mouseReleaseEvent(event)
