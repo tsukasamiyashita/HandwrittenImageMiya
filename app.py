@@ -2,6 +2,7 @@
 import sys
 import os
 import math
+import json
 import fitz # PyMuPDF
 import tempfile # 一時ファイルを安全に処理するため
 from PyQt6.QtWidgets import (
@@ -17,7 +18,7 @@ from PyQt6.QtGui import (
     QPixmap, QImage, QPainter, QPen, QColor, QPolygonF, QFont, QAction, QTransform,
     QPainterPath, QPainterPathStroker, QImageReader, QBrush, QPalette, QIcon
 )
-from PyQt6.QtCore import Qt, QPointF, QRectF, QLineF, QTimer
+from PyQt6.QtCore import Qt, QPointF, QRectF, QLineF, QTimer, QBuffer, QByteArray, QIODevice
 
 # ==============================
 # リソースパス取得関数 (exe化対応)
@@ -1190,6 +1191,242 @@ class AnnotationScene(QGraphicsScene):
                 self.save_state()
 
 
+# ==========================================
+# 専用ファイル形式（.hwi）シリアライズ処理
+# ==========================================
+def color_to_hex(color):
+    return color.name(QColor.NameFormat.HexArgb)
+
+def hex_to_color(hex_str):
+    return QColor(hex_str)
+
+def serialize_pen(pen):
+    return {
+        'color': color_to_hex(pen.color()),
+        'width': pen.widthF(),
+        'style': int(pen.style()),
+        'cap': int(pen.capStyle()),
+        'join': int(pen.joinStyle())
+    }
+
+def deserialize_pen(data):
+    pen = QPen(hex_to_color(data['color']))
+    pen.setWidthF(data['width'])
+    pen.setStyle(Qt.PenStyle(data['style']))
+    pen.setCapStyle(Qt.PenCapStyle(data['cap']))
+    pen.setJoinStyle(Qt.PenJoinStyle(data['join']))
+    return pen
+
+def serialize_brush(brush):
+    return {
+        'color': color_to_hex(brush.color()),
+        'style': int(brush.style())
+    }
+
+def deserialize_brush(data):
+    brush = QBrush(hex_to_color(data['color']))
+    brush.setStyle(Qt.BrushStyle(data['style']))
+    return brush
+
+def pixmap_to_base64(pixmap):
+    if pixmap.isNull():
+        return ""
+    byte_array = QByteArray()
+    buffer = QBuffer(byte_array)
+    buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+    pixmap.save(buffer, "PNG")
+    return byte_array.toBase64().data().decode('utf-8')
+
+def base64_to_pixmap(base64_str):
+    if not base64_str:
+        return QPixmap()
+    byte_array = QByteArray.fromBase64(base64_str.encode('utf-8'))
+    image = QImage.fromData(byte_array, "PNG")
+    return QPixmap.fromImage(image)
+
+def serialize_path(path):
+    elements = []
+    for i in range(path.elementCount()):
+        el = path.elementAt(i)
+        elements.append({
+            'type': int(el.type),
+            'x': el.x,
+            'y': el.y
+        })
+    return elements
+
+def deserialize_path(elements):
+    path = QPainterPath()
+    i = 0
+    num_elements = len(elements)
+    while i < num_elements:
+        el = elements[i]
+        t = el['type']
+        if t == 0:
+            path.moveTo(el['x'], el['y'])
+            i += 1
+        elif t == 1:
+            path.lineTo(el['x'], el['y'])
+            i += 1
+        elif t == 2:
+            if i + 2 < num_elements:
+                ctrl1 = elements[i]
+                ctrl2 = elements[i+1]
+                end_pt = elements[i+2]
+                path.cubicTo(ctrl1['x'], ctrl1['y'], ctrl2['x'], ctrl2['y'], end_pt['x'], end_pt['y'])
+                i += 3
+            else:
+                path.lineTo(el['x'], el['y'])
+                i += 1
+        else:
+            i += 1
+    return path
+
+def serialize_project(scene):
+    state = scene.get_scene_state()
+    items_data = state['items']
+    
+    serialized_items = []
+    for item in items_data:
+        item_type = item['type']
+        s_item = {
+            'type': item_type,
+            'pos': [item['pos'].x(), item['pos'].y()]
+        }
+        
+        if 'pen' in item:
+            s_item['pen'] = serialize_pen(item['pen'])
+            
+        if 'brush' in item:
+            s_item['brush'] = serialize_brush(item['brush'])
+            
+        if item_type in ['line', 'arrow']:
+            line = item['line']
+            s_item['line'] = [line.p1().x(), line.p1().y(), line.p2().x(), line.p2().y()]
+        elif item_type in ['rect', 'ellipse']:
+            rect = item['rect']
+            s_item['rect'] = [rect.x(), rect.y(), rect.width(), rect.height()]
+        elif item_type == 'polygon':
+            poly = item['polygon']
+            s_item['polygon'] = [[pt.x(), pt.y()] for pt in poly]
+        elif item_type == 'path':
+            s_item['path'] = serialize_path(item['path'])
+        elif item_type == 'text':
+            s_item['text'] = item['text']
+            font = item['font']
+            s_item['font'] = {
+                'family': font.family(),
+                'size': font.pointSizeF(),
+                'bold': font.bold(),
+                'italic': font.italic()
+            }
+            s_item['color'] = color_to_hex(item['color'])
+            s_item['scale'] = item['scale']
+        elif item_type == 'pixmap':
+            s_item['pixmap'] = pixmap_to_base64(item['pixmap'])
+            rect = item['rect']
+            s_item['rect'] = [rect.x(), rect.y(), rect.width(), rect.height()]
+            
+        serialized_items.append(s_item)
+        
+    bg_pixmap_base64 = pixmap_to_base64(state['bg_pixmap'])
+    bg_rect = state['bg_rect']
+    original_image_rect = state['original_image_rect']
+    
+    project_data = {
+        'version': '1.5.0',
+        'bg_pixmap': bg_pixmap_base64,
+        'bg_rect': [bg_rect.x(), bg_rect.y(), bg_rect.width(), bg_rect.height()],
+        'original_image_rect': [original_image_rect.x(), original_image_rect.y(), original_image_rect.width(), original_image_rect.height()],
+        'items': serialized_items
+    }
+    return project_data
+
+def deserialize_project(project_data, scene):
+    scene.clear()
+    scene.margin_handles.clear()
+    
+    bg_pixmap = base64_to_pixmap(project_data['bg_pixmap'])
+    scene.bg_item = scene.addPixmap(bg_pixmap)
+    scene.bg_item.setZValue(-1.0)
+    scene.bg_item.setFlags(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable ^ QGraphicsItem.GraphicsItemFlag.ItemIsFocusable)
+    
+    br = project_data['bg_rect']
+    scene.setSceneRect(QRectF(br[0], br[1], br[2], br[3]))
+    
+    oir = project_data['original_image_rect']
+    scene.original_image_rect = QRectF(oir[0], oir[1], oir[2], oir[3])
+    
+    for item_data in project_data['items']:
+        item_type = item_data['type']
+        pos = QPointF(item_data['pos'][0], item_data['pos'][1])
+        
+        pen = deserialize_pen(item_data['pen']) if 'pen' in item_data else None
+        brush = deserialize_brush(item_data['brush']) if 'brush' in item_data else None
+        
+        new_item = None
+        if item_type == 'line':
+            line_coords = item_data['line']
+            line = QLineF(line_coords[0], line_coords[1], line_coords[2], line_coords[3])
+            new_item = CustomLineItem(line, pen)
+        elif item_type == 'arrow':
+            line_coords = item_data['line']
+            line = QLineF(line_coords[0], line_coords[1], line_coords[2], line_coords[3])
+            new_item = ArrowItem(line, pen)
+        elif item_type == 'rect':
+            r_coords = item_data['rect']
+            rect = QRectF(r_coords[0], r_coords[1], r_coords[2], r_coords[3])
+            new_item = CustomRectItem(rect, pen)
+            if brush:
+                new_item.setBrush(brush)
+        elif item_type == 'ellipse':
+            r_coords = item_data['rect']
+            rect = QRectF(r_coords[0], r_coords[1], r_coords[2], r_coords[3])
+            new_item = CustomEllipseItem(rect, pen)
+            if brush:
+                new_item.setBrush(brush)
+        elif item_type == 'polygon':
+            poly_pts = [QPointF(pt[0], pt[1]) for pt in item_data['polygon']]
+            polygon = QPolygonF(poly_pts)
+            new_item = CustomPolygonItem(polygon, pen)
+            if brush:
+                new_item.setBrush(brush)
+        elif item_type == 'path':
+            path = deserialize_path(item_data['path'])
+            new_item = CustomPathItem(path, pen)
+            if brush:
+                new_item.setBrush(brush)
+        elif item_type == 'text':
+            new_item = CustomTextItem(item_data['text'])
+            f_data = item_data['font']
+            font = QFont(f_data['family'])
+            font.setPointSizeF(f_data['size'])
+            font.setBold(f_data['bold'])
+            font.setItalic(f_data['italic'])
+            new_item.setFont(font)
+            new_item.setDefaultTextColor(hex_to_color(item_data['color']))
+            if pen:
+                new_item.setPen(pen)
+            if brush:
+                new_item.setBrush(brush)
+            new_item.setScale(item_data['scale'])
+        elif item_type == 'pixmap':
+            pix = base64_to_pixmap(item_data['pixmap'])
+            r_coords = item_data['rect']
+            rect = QRectF(r_coords[0], r_coords[1], r_coords[2], r_coords[3])
+            new_item = CustomPixmapItem(pix, rect)
+            
+        if new_item:
+            new_item.setPos(pos)
+            scene.addItem(new_item)
+            
+    scene.undo_stack.clear()
+    scene.redo_stack.clear()
+    scene.save_state()
+    scene.has_unsaved_changes = False
+    scene.update_margin_handles()
+
+
 class AdvancedAnnotationApp(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -1848,7 +2085,7 @@ class AdvancedAnnotationApp(QMainWindow):
 
         default_dir = self.current_dir if self.current_dir else os.path.expanduser("~")
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "ファイルを開く", default_dir, "Images/PDF (*.png *.jpg *.jpeg *.pdf)"
+            self, "ファイルを開く", default_dir, "Supported Files (*.png *.jpg *.jpeg *.pdf *.hwi);;Images/PDF (*.png *.jpg *.jpeg *.pdf);;HandwrittenImage Projects (*.hwi)"
         )
         if not file_path:
             return
@@ -1863,7 +2100,16 @@ class AdvancedAnnotationApp(QMainWindow):
         self.next_page_action.setEnabled(False)
         self.zoom_reset()
 
-        if self.current_ext == ".pdf":
+        if self.current_ext == ".hwi":
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    project_data = json.load(f)
+                deserialize_project(project_data, self.scene)
+                self.setWindowTitle(f"HandwrittenImageMiya - {os.path.basename(file_path)}")
+                self.fit_to_view()
+            except Exception as e:
+                QMessageBox.warning(self, "エラー", f"プロジェクトの読み込みに失敗しました。\n{e}")
+        elif self.current_ext == ".pdf":
             self.current_pdf_doc = fitz.open(file_path)
             self.current_pdf_page = 0
             self.load_pdf_page()
@@ -1876,6 +2122,7 @@ class AdvancedAnnotationApp(QMainWindow):
             if not image.isNull():
                 pixmap = QPixmap.fromImage(image)
                 self.scene.set_background(pixmap)
+                self.setWindowTitle(f"HandwrittenImageMiya - {os.path.basename(file_path)}")
                 self.fit_to_view()
             else:
                 QMessageBox.warning(self, "エラー", "画像の読み込みに失敗しました。")
@@ -1887,7 +2134,7 @@ class AdvancedAnnotationApp(QMainWindow):
         fmt = QImage.Format.Format_RGB888
         qimg = QImage(pix.samples, pix.width, pix.height, pix.stride, fmt)
         self.scene.set_background(QPixmap.fromImage(qimg))
-        self.setWindowTitle(f"HandwrittenImageMiya - Page {self.current_pdf_page + 1}/{len(self.current_pdf_doc)}")
+        self.setWindowTitle(f"HandwrittenImageMiya - {os.path.basename(self.current_file_path)} (Page {self.current_pdf_page + 1}/{len(self.current_pdf_doc)})")
         self.fit_to_view()
 
     def change_page(self, delta):
@@ -2049,7 +2296,7 @@ class AdvancedAnnotationApp(QMainWindow):
     def save_file_as(self):
         """名前を付けて保存"""
         default_ext = self.current_ext
-        if not default_ext: default_ext = ".jpg"
+        if not default_ext: default_ext = ".hwi"
         
         initial_name = f"{self.current_filename}_After{default_ext}"
         if not self.current_filename:
@@ -2058,13 +2305,13 @@ class AdvancedAnnotationApp(QMainWindow):
         initial_path = os.path.join(self.current_dir, initial_name) if self.current_dir else initial_name
         
         if default_ext == ".png":
-            filter_str = "PNG Image (*.png);;JPEG Image (*.jpg);;PDF Document (*.pdf)"
+            filter_str = "PNG Image (*.png);;JPEG Image (*.jpg);;PDF Document (*.pdf);;HandwrittenImage Projects (*.hwi)"
         elif default_ext == ".pdf":
-            filter_str = "PDF Document (*.pdf);;JPEG Image (*.jpg);;PNG Image (*.png)"
-        elif default_ext in [".jpg", ".jpeg"]:
-            filter_str = "JPEG Image (*.jpg);;PNG Image (*.png);;PDF Document (*.pdf)"
+            filter_str = "PDF Document (*.pdf);;JPEG Image (*.jpg);;PNG Image (*.png);;HandwrittenImage Projects (*.hwi)"
+        elif default_ext == ".hwi":
+            filter_str = "HandwrittenImage Projects (*.hwi);;JPEG Image (*.jpg);;PNG Image (*.png);;PDF Document (*.pdf)"
         else:
-            filter_str = "JPEG Image (*.jpg);;PNG Image (*.png);;PDF Document (*.pdf)"
+            filter_str = "HandwrittenImage Projects (*.hwi);;JPEG Image (*.jpg);;PNG Image (*.png);;PDF Document (*.pdf)"
         
         file_path, selected_filter = QFileDialog.getSaveFileName(
             self, "名前を付けて保存", initial_path, filter_str
@@ -2087,6 +2334,20 @@ class AdvancedAnnotationApp(QMainWindow):
                 self.scene.removeItem(self.scene.pending_text_item)
                 self.scene.pending_text_item = None
                 self.set_tool("select")
+
+            # プロジェクト形式（.hwi）としての書き出し
+            if save_ext == ".hwi":
+                project_data = serialize_project(self.scene)
+                with open(file_path, "w", encoding="utf-8") as f:
+                    json.dump(project_data, f, ensure_ascii=False, indent=2)
+                self.scene.has_unsaved_changes = False
+                self.current_file_path = file_path
+                self.current_dir = os.path.dirname(file_path)
+                self.current_filename = os.path.splitext(os.path.basename(file_path))[0]
+                self.current_ext = ".hwi"
+                self.setWindowTitle(f"HandwrittenImageMiya - {os.path.basename(file_path)}")
+                self.show_auto_close_message("完了", "プロジェクトファイル(.hwi)として保存しました。")
+                return
 
             if save_ext == ".pdf":
                 self.scene.clearSelection()
@@ -2115,6 +2376,10 @@ class AdvancedAnnotationApp(QMainWindow):
                 
                 self.scene.has_unsaved_changes = False
                 self.current_file_path = file_path
+                self.current_dir = os.path.dirname(file_path)
+                self.current_filename = os.path.splitext(os.path.basename(file_path))[0]
+                self.current_ext = ".pdf"
+                self.setWindowTitle(f"HandwrittenImageMiya - {os.path.basename(file_path)}")
                 self.show_auto_close_message("完了", "PDFとして保存しました。")
                 return
 
@@ -2130,6 +2395,9 @@ class AdvancedAnnotationApp(QMainWindow):
                 self.scene.has_unsaved_changes = False
                 self.current_file_path = file_path
                 self.current_dir = os.path.dirname(file_path)
+                self.current_filename = os.path.splitext(os.path.basename(file_path))[0]
+                self.current_ext = save_ext
+                self.setWindowTitle(f"HandwrittenImageMiya - {os.path.basename(file_path)}")
                 self.show_auto_close_message("完了", f"{save_ext.upper()}として保存しました。")
             else:
                 QMessageBox.warning(self, "エラー", "保存に失敗しました。")
