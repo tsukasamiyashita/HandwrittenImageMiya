@@ -10,7 +10,8 @@ from PyQt6.QtWidgets import (
     QGraphicsRectItem, QGraphicsLineItem, QGraphicsTextItem,
     QGraphicsEllipseItem, QGraphicsPolygonItem, QGraphicsPathItem,
     QGraphicsItem, QMessageBox, QLabel, QMenu, QComboBox,
-    QWidget, QSizePolicy, QDialog, QVBoxLayout, QTextEdit, QPushButton
+    QWidget, QSizePolicy, QDialog, QVBoxLayout, QTextEdit, QPushButton,
+    QHBoxLayout
 )
 from PyQt6.QtGui import (
     QPixmap, QImage, QPainter, QPen, QColor, QPolygonF, QFont, QAction, QTransform,
@@ -180,6 +181,118 @@ class CustomPixmapItem(QGraphicsItem):
         return path
 
 
+class MarginHandleItem(QGraphicsRectItem):
+    """余白をドラッグ操作で直観的に追加・削減するための専用ハンドル"""
+    def __init__(self, side, rect, parent_scene):
+        super().__init__(rect)
+        self.side = side # 'top', 'bottom', 'left', 'right'
+        self.parent_scene = parent_scene
+        self.setAcceptHoverEvents(True)
+        self.setBrush(QBrush(QColor(0, 120, 255, 120))) # 半透明な薄いブルー
+        self.setPen(QPen(Qt.PenStyle.NoPen))
+        self.setZValue(999999) # 常に最前面
+        self.press_pos = None
+        self.orig_rect = None
+        self.preview_rect = None
+
+    def hoverEnterEvent(self, event):
+        if self.side in ['top', 'bottom']:
+            self.setCursor(Qt.CursorShape.SizeVerCursor)
+        else:
+            self.setCursor(Qt.CursorShape.SizeHorCursor)
+        self.setBrush(QBrush(QColor(0, 120, 255, 200))) # ホバー時に強調
+        super().hoverEnterEvent(event)
+
+    def hoverLeaveEvent(self, event):
+        self.setBrush(QBrush(QColor(0, 120, 255, 120)))
+        super().hoverLeaveEvent(event)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.press_pos = event.scenePos()
+            self.orig_rect = self.parent_scene.sceneRect()
+            # プレビュー用の破線枠を作成
+            self.preview_rect = QGraphicsRectItem(self.orig_rect)
+            self.preview_rect.setPen(QPen(QColor(0, 120, 255), 2, Qt.PenStyle.DashLine))
+            self.preview_rect.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+            self.preview_rect.setZValue(999998)
+            self.parent_scene.addItem(self.preview_rect)
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self.press_pos and self.preview_rect:
+            delta = event.scenePos() - self.press_pos
+            new_rect = QRectF(self.orig_rect)
+            min_size = 50.0 # 削りすぎ防止の最小サイズガード（50px）
+            
+            # シーン座標系におけるオリジナル画像の領域を取得（これより内側に縮めてはならない）
+            orig_img_rect = getattr(self.parent_scene, 'original_image_rect', None)
+            
+            # 引っ張る・押し込む方向に応じてプレビュー矩形を拡張・縮小。かつ、オリジナル画像領域を超えて狭められないようにガード
+            if self.side == 'top':
+                new_top = self.orig_rect.top() + delta.y()
+                if new_top > self.orig_rect.bottom() - min_size:
+                    new_top = self.orig_rect.bottom() - min_size
+                # オリジナル画像より下（内側）に境界をめり込ませないガード
+                if orig_img_rect and new_top > orig_img_rect.top():
+                    new_top = orig_img_rect.top()
+                new_rect.setTop(new_top)
+            elif self.side == 'bottom':
+                new_bottom = self.orig_rect.bottom() + delta.y()
+                if new_bottom < self.orig_rect.top() + min_size:
+                    new_bottom = self.orig_rect.top() + min_size
+                # オリジナル画像より上（内側）に境界をめり込ませないガード
+                if orig_img_rect and new_bottom < orig_img_rect.bottom():
+                    new_bottom = orig_img_rect.bottom()
+                new_rect.setBottom(new_bottom)
+            elif self.side == 'left':
+                new_left = self.orig_rect.left() + delta.x()
+                if new_left > self.orig_rect.right() - min_size:
+                    new_left = self.orig_rect.right() - min_size
+                # オリジナル画像より右（内側）に境界をめり込ませないガード
+                if orig_img_rect and new_left > orig_img_rect.left():
+                    new_left = orig_img_rect.left()
+                new_rect.setLeft(new_left)
+            elif self.side == 'right':
+                new_right = self.orig_rect.right() + delta.x()
+                if new_right < self.orig_rect.left() + min_size:
+                    new_right = self.orig_rect.left() + min_size
+                # オリジナル画像より左（内側）に境界をめり込ませないガード
+                if orig_img_rect and new_right < orig_img_rect.right():
+                    new_right = orig_img_rect.right()
+                new_rect.setRight(new_right)
+                
+            self.preview_rect.setRect(new_rect)
+            event.accept()
+        else:
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self.preview_rect:
+            final_rect = self.preview_rect.rect()
+            self.parent_scene.removeItem(self.preview_rect)
+            self.preview_rect = None
+            self.press_pos = None
+            
+            # 拡張（正値）または削減（負値）のピクセル数を算出
+            top_margin = int(self.orig_rect.top() - final_rect.top())
+            bottom_margin = int(final_rect.bottom() - self.orig_rect.bottom())
+            left_margin = int(self.orig_rect.left() - final_rect.left())
+            right_margin = int(final_rect.right() - self.orig_rect.right())
+            
+            if top_margin != 0 or bottom_margin != 0 or left_margin != 0 or right_margin != 0:
+                main_win = self.parent_scene.parent()
+                if hasattr(main_win, 'apply_margin'):
+                    # 現在設定されている「背景/塗色」を余白背景色として使用する（透過の場合は白）
+                    color = self.parent_scene.current_brush_color if self.parent_scene.use_fill else QColor(Qt.GlobalColor.white)
+                    main_win.apply_margin(top_margin, bottom_margin, left_margin, right_margin, color)
+            event.accept()
+        else:
+            super().mouseReleaseEvent(event)
+
+
 class AnnotationScene(QGraphicsScene):
     """画像と注釈を管理するシーン"""
     def __init__(self, parent=None):
@@ -215,6 +328,12 @@ class AnnotationScene(QGraphicsScene):
         
         self.has_unsaved_changes = False
         
+        # 余白ドラッグ用ハンドルのリスト
+        self.margin_handles = []
+        
+        # オリジナル画像自体の領域（シーン座標系。これ以下には削れなくする）
+        self.original_image_rect = QRectF()
+        
         # Undo/Redo用のスタック
         self.undo_stack = []
         self.redo_stack = []
@@ -224,13 +343,13 @@ class AnnotationScene(QGraphicsScene):
         """シーン内で最も前面に配置するためのZ値を取得"""
         max_z = 0.0
         for item in self.items():
-            if item != self.bg_item and item.zValue() > max_z:
+            if item != self.bg_item and item.zValue() > max_z and not isinstance(item, MarginHandleItem):
                 max_z = item.zValue()
         return max_z + 1.0
 
     def bring_to_front(self, item):
         """指定したアイテムを最前面に移動"""
-        if not item or item == self.bg_item:
+        if not item or item == self.bg_item or isinstance(item, MarginHandleItem):
             return
         item.setZValue(self.get_next_z_value())
         self.has_unsaved_changes = True
@@ -241,7 +360,7 @@ class AnnotationScene(QGraphicsScene):
         """現在のシーンのアイテム状態をシリアライズして取得"""
         state = []
         for item in self.items():
-            if item == self.bg_item or item.zValue() < 0 or item == self.pending_text_item:
+            if item == self.bg_item or item.zValue() < 0 or item == self.pending_text_item or isinstance(item, MarginHandleItem):
                 continue
             if isinstance(item, ArrowItem):
                 state.append({'type': 'arrow', 'line': item.line(), 'pen': QPen(item.pen()), 'pos': item.pos()})
@@ -264,17 +383,45 @@ class AnnotationScene(QGraphicsScene):
                 })
             elif isinstance(item, CustomPixmapItem):
                 state.append({'type': 'pixmap', 'pixmap': item.original_pixmap, 'rect': item.rect(), 'pos': item.pos()})
-        return list(reversed(state))
+        
+        bg_pixmap = self.bg_item.pixmap() if self.bg_item else QPixmap()
+        bg_rect = self.sceneRect()
+        original_image_rect = getattr(self, 'original_image_rect', QRectF())
+        
+        return {
+            'items': list(reversed(state)),
+            'bg_pixmap': bg_pixmap,
+            'bg_rect': bg_rect,
+            'original_image_rect': original_image_rect
+        }
 
     def restore_scene_state(self, state):
         """保存された状態からシーンを復元"""
+        if isinstance(state, dict):
+            items_data = state['items']
+            bg_pixmap = state.get('bg_pixmap')
+            bg_rect = state.get('bg_rect')
+            original_image_rect = state.get('original_image_rect', QRectF())
+        else:
+            items_data = state
+            bg_pixmap = None
+            bg_rect = None
+            original_image_rect = QRectF()
+
         for item in self.items():
-            if item != self.bg_item:
+            if item != self.bg_item and not isinstance(item, MarginHandleItem):
                 self.removeItem(item)
         
         self.clearSelection()
 
-        for i, data in enumerate(state):
+        if bg_pixmap and self.bg_item:
+            self.bg_item.setPixmap(bg_pixmap)
+        if bg_rect:
+            self.setSceneRect(bg_rect)
+            
+        self.original_image_rect = original_image_rect
+
+        for i, data in enumerate(items_data):
             item_type = data['type']
             new_item = None
             if item_type == 'arrow':
@@ -308,6 +455,8 @@ class AnnotationScene(QGraphicsScene):
                 new_item.setPos(data['pos'])
                 self.addItem(new_item)
 
+        self.update_margin_handles()
+
     def save_state(self):
         """操作のたびに状態をスタックに保存"""
         state = self.get_scene_state()
@@ -333,15 +482,43 @@ class AnnotationScene(QGraphicsScene):
 
     def set_background(self, pixmap):
         self.clear()
+        self.margin_handles.clear()
         self.bg_item = self.addPixmap(pixmap)
         self.bg_item.setZValue(-1.0) 
         self.bg_item.setFlags(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable ^ QGraphicsItem.GraphicsItemFlag.ItemIsFocusable) 
         self.setSceneRect(QRectF(pixmap.rect()))
         
+        # オリジナル画像のサイズ範囲を保存
+        self.original_image_rect = QRectF(0, 0, pixmap.width(), pixmap.height())
+        
         self.undo_stack.clear()
         self.redo_stack.clear()
         self.save_state()
         self.has_unsaved_changes = False
+
+    def update_margin_handles(self):
+        """現在のツールモードに応じて余白ドラッグハンドルを同期配置する"""
+        self.clear_margin_handles()
+        if self.current_tool == "margin" and self.bg_item:
+            r = self.sceneRect()
+            thickness = 24.0 # 操作しやすいように少し太めのサイズに設定
+            half = thickness / 2.0
+            
+            # 画像の境界線を跨ぐ形で配置し、視覚的に掴みやすいレイアウトに改善
+            top_h = MarginHandleItem('top', QRectF(r.left(), r.top() - half, r.width(), thickness), self)
+            bot_h = MarginHandleItem('bottom', QRectF(r.left(), r.bottom() - half, r.width(), thickness), self)
+            left_h = MarginHandleItem('left', QRectF(r.left() - half, r.top(), thickness, r.height()), self)
+            right_h = MarginHandleItem('right', QRectF(r.right() - half, r.top(), thickness, r.height()), self)
+            
+            for h in [top_h, bot_h, left_h, right_h]:
+                self.addItem(h)
+                self.margin_handles.append(h)
+
+    def clear_margin_handles(self):
+        """一時的な余白ドラッグハンドルをシーンから消去する"""
+        for h in self.margin_handles:
+            self.removeItem(h)
+        self.margin_handles.clear()
 
     def drawForeground(self, painter, rect):
         """選択アイテムにサイズ変更用のハンドルを描画"""
@@ -354,7 +531,7 @@ class AnnotationScene(QGraphicsScene):
         handle_size = 12
 
         for item in self.selectedItems():
-            if item == self.bg_item or item == self.pending_text_item:
+            if item == self.bg_item or item == self.pending_text_item or isinstance(item, MarginHandleItem):
                 continue
 
             if isinstance(item, (QGraphicsRectItem, QGraphicsEllipseItem)):
@@ -408,6 +585,11 @@ class AnnotationScene(QGraphicsScene):
                     self.parent().set_tool("select")
                 event.accept()
                 return
+
+        # 余白ドラッグモードの時は、グラフィックスアイテム（MarginHandleItem）へイベントを透過する
+        if self.current_tool == "margin":
+            super().mousePressEvent(event)
+            return
 
         if self.current_tool == "select":
             if event.button() == Qt.MouseButton.RightButton:
@@ -541,6 +723,11 @@ class AnnotationScene(QGraphicsScene):
             event.accept()
             return
 
+        # 余白ドラッグモードの時は、グラフィックスアイテム（MarginHandleItem）へイベントを透過する
+        if self.current_tool == "margin":
+            super().mouseMoveEvent(event)
+            return
+
         if self.current_tool == "select":
             if event.buttons() == Qt.MouseButton.NoButton:
                 pos = event.scenePos()
@@ -549,7 +736,7 @@ class AnnotationScene(QGraphicsScene):
                 cursor_shape = Qt.CursorShape.ArrowCursor
 
                 for item in self.selectedItems():
-                    if item == self.bg_item:
+                    if item == self.bg_item or isinstance(item, MarginHandleItem):
                         continue
                     
                     if isinstance(item, CustomPixmapItem):
@@ -601,7 +788,7 @@ class AnnotationScene(QGraphicsScene):
                 if not on_handle:
                     transform = self.views()[0].transform() if self.views() else QTransform()
                     item_under_mouse = self.itemAt(pos, transform)
-                    if item_under_mouse and item_under_mouse != self.bg_item:
+                    if item_under_mouse and item_under_mouse != self.bg_item and not isinstance(item_under_mouse, MarginHandleItem):
                         if item_under_mouse.isSelected():
                             cursor_shape = Qt.CursorShape.SizeAllCursor
                         else:
@@ -658,7 +845,7 @@ class AnnotationScene(QGraphicsScene):
                     elif mode == "bottom_left":
                         anchor = start_rect.topRight()
                         dx = anchor.x() - pos.x()
-                        dy = pos.y() - anchor.y()
+                        dy = anchor.y() - pos.y()
                         sign_x = 1 if dx >= 0 else -1
                         sign_y = 1 if dy >= 0 else -1
                         val = max(abs(dx), abs(dy) * r)
@@ -730,7 +917,7 @@ class AnnotationScene(QGraphicsScene):
             is_moving = False
             if event.buttons() == Qt.MouseButton.LeftButton:
                 for item in self.selectedItems():
-                    if item != self.bg_item:
+                    if item != self.bg_item and not isinstance(item, MarginHandleItem):
                         self.has_unsaved_changes = True
                         self.was_modified = True
                         is_moving = True
@@ -759,6 +946,11 @@ class AnnotationScene(QGraphicsScene):
                     self.temp_item.setPolygon(QPolygonF([p1, p2, p3]))
 
     def mouseReleaseEvent(self, event):
+        # 余白ドラッグモードの時は、グラフィックスアイテム（MarginHandleItem）へイベントを透過する
+        if self.current_tool == "margin":
+            super().mouseReleaseEvent(event)
+            return
+
         if self.current_tool == "select":
             if getattr(self, 'was_modified', False):
                 self.save_state()
@@ -788,7 +980,7 @@ class AnnotationScene(QGraphicsScene):
         """選択されているアイテムを削除する"""
         deleted = False
         for item in self.selectedItems():
-            if item != self.bg_item:
+            if item != self.bg_item and not isinstance(item, MarginHandleItem):
                 self.removeItem(item)
                 deleted = True
         if deleted:
@@ -811,7 +1003,7 @@ class AnnotationScene(QGraphicsScene):
         transform = self.views()[0].transform() if self.views() else QTransform()
         target_item = self.itemAt(pos, transform)
         
-        if target_item == self.bg_item:
+        if target_item == self.bg_item or isinstance(target_item, MarginHandleItem):
             target_item = None
 
         menu = QMenu()
@@ -1330,10 +1522,17 @@ class AdvancedAnnotationApp(QMainWindow):
         toolbar2.addAction(act_text)
         self.tool_actions["text"] = act_text
 
-        # ＝＝＝ 画像挿入アクション（新規追加） ＝＝＝
+        # ＝＝＝ 画像挿入アクション ＝＝＝
         act_insert_img = QAction("🖼️ 画像挿入", self)
         act_insert_img.triggered.connect(self.insert_image)
         toolbar2.addAction(act_insert_img)
+
+        # ＝＝＝ ドラッグ余白追加アクション ＝＝＝
+        act_add_margin = QAction("⏹️ 余白調整(ドラッグ)", self)
+        act_add_margin.setCheckable(True)
+        act_add_margin.triggered.connect(lambda checked: self.set_tool("margin"))
+        toolbar2.addAction(act_add_margin)
+        self.tool_actions["margin"] = act_add_margin
 
         self.tool_actions["select"].setChecked(True)
         toolbar2.addSeparator()
@@ -1411,8 +1610,15 @@ class AdvancedAnnotationApp(QMainWindow):
         for tid, action in self.tool_actions.items():
             action.setChecked(tid == tool_id)
             
+        # 余白用ドラッグハンドルの表示切り替え
+        self.scene.update_margin_handles()
+
         if tool_id == "select":
             self.view.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
+            self.view.viewport().setCursor(Qt.CursorShape.ArrowCursor)
+        elif tool_id == "margin":
+            self.view.setDragMode(QGraphicsView.DragMode.NoDrag)
+            self.scene.clearSelection()
             self.view.viewport().setCursor(Qt.CursorShape.ArrowCursor)
         else:
             self.view.setDragMode(QGraphicsView.DragMode.NoDrag)
@@ -1732,6 +1938,74 @@ class AdvancedAnnotationApp(QMainWindow):
                 QMessageBox.warning(self, "エラー", "ファイルの読み込みに失敗しました。")
         except Exception as e:
             QMessageBox.critical(self, "エラー", f"画像の挿入中にエラーが発生しました。\n{e}")
+
+    def apply_margin(self, top, bottom, left, right, color):
+        """余白を作成・削減して背景画像に適用し、既存 of 注釈をシフトして位置を補正する"""
+        try:
+            current_bg_pixmap = self.scene.bg_item.pixmap()
+            orig_w = current_bg_pixmap.width()
+            orig_h = current_bg_pixmap.height()
+            
+            new_w = orig_w + left + right
+            new_h = orig_h + top + bottom
+            
+            # 最低限の描画可能サイズ（10px）を下回らないよう制限
+            if new_w < 10: new_w = 10
+            if new_h < 10: new_h = 10
+            
+            # 新しい背景QPixmapの作成
+            new_pixmap = QPixmap(new_w, new_h)
+            new_pixmap.fill(color)
+            
+            # 削減（負の余白）が発生した場合の切り出し矩形の算出
+            src_x = -left if left < 0 else 0
+            src_y = -top if top < 0 else 0
+            src_w = orig_w - (-left if left < 0 else 0) - (-right if right < 0 else 0)
+            src_h = orig_h - (-top if top < 0 else 0) - (-bottom if bottom < 0 else 0)
+            
+            if src_w < 1: src_w = 1
+            if src_h < 1: src_h = 1
+            
+            # 拡張（正の余白）が発生した場合の新しい貼り付け先座標
+            dest_x = left if left >= 0 else 0
+            dest_y = top if top >= 0 else 0
+            
+            # 元画像を適切な切り出し矩形を用いてQPainterで描画（トリミングと余白追加を統合）
+            painter = QPainter(new_pixmap)
+            painter.drawPixmap(dest_x, dest_y, current_bg_pixmap, src_x, src_y, src_w, src_h)
+            painter.end()
+            
+            # 既存のすべての注釈アイテムの位置を補正シフト（削減・追加の方向に対応）
+            items_to_move = []
+            for item in self.scene.items():
+                if (item != self.scene.bg_item and 
+                    item.parentItem() is None and 
+                    item != getattr(self.scene, 'pending_text_item', None) and 
+                    not isinstance(item, MarginHandleItem)):
+                    items_to_move.append(item)
+                    
+            for item in items_to_move:
+                item.moveBy(float(left), float(top))
+                
+            # 背景のQPixmapとシーンサイズを更新
+            self.scene.bg_item.setPixmap(new_pixmap)
+            self.scene.setSceneRect(QRectF(new_pixmap.rect()))
+            
+            # オリジナル画像のシーン内位置を補正（めり込み保護の境界判定のために平行シフト）
+            if hasattr(self.scene, 'original_image_rect') and self.scene.original_image_rect:
+                self.scene.original_image_rect.translate(float(left), float(top))
+            
+            # ドラッグハンドルの位置も同期的に更新
+            self.scene.update_margin_handles()
+            
+            # Undoスタックに保存して更新通知
+            self.scene.has_unsaved_changes = True
+            self.scene.save_state()
+            self.scene.update()
+            self.fit_to_view()
+            
+        except Exception as e:
+            QMessageBox.critical(self, "エラー", f"余白追加・削減の実行中にエラーが発生しました。\n{e}")
 
     def save_file(self):
         """上書き保存（パスがない場合は新規保存へ）"""
