@@ -1204,9 +1204,9 @@ def serialize_pen(pen):
     return {
         'color': color_to_hex(pen.color()),
         'width': pen.widthF(),
-        'style': int(pen.style()),
-        'cap': int(pen.capStyle()),
-        'join': int(pen.joinStyle())
+        'style': pen.style().value if hasattr(pen.style(), 'value') else int(pen.style()),
+        'cap': pen.capStyle().value if hasattr(pen.capStyle(), 'value') else int(pen.capStyle()),
+        'join': pen.joinStyle().value if hasattr(pen.joinStyle(), 'value') else int(pen.joinStyle())
     }
 
 def deserialize_pen(data):
@@ -1220,7 +1220,7 @@ def deserialize_pen(data):
 def serialize_brush(brush):
     return {
         'color': color_to_hex(brush.color()),
-        'style': int(brush.style())
+        'style': brush.style().value if hasattr(brush.style(), 'value') else int(brush.style())
     }
 
 def deserialize_brush(data):
@@ -1249,7 +1249,7 @@ def serialize_path(path):
     for i in range(path.elementCount()):
         el = path.elementAt(i)
         elements.append({
-            'type': int(el.type),
+            'type': el.type.value if hasattr(el.type, 'value') else int(el.type),
             'x': el.x,
             'y': el.y
         })
@@ -1438,9 +1438,8 @@ class AdvancedAnnotationApp(QMainWindow):
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
         
-        # 画面のスタイル（デザイン）を適用（初期状態はシステム設定に追従）
-        self.is_dark = self.palette().color(QPalette.ColorRole.Window).lightness() < 128
-        self.apply_stylesheet(self.is_dark)
+        # 画面のスタイル（デザイン）を適用（ライトモードに固定）
+        self.apply_stylesheet()
 
         self.scene = AnnotationScene(self)
         self.scene.selectionChanged.connect(self.sync_properties_from_selection)
@@ -1458,32 +1457,18 @@ class AdvancedAnnotationApp(QMainWindow):
         self.init_menubar()
         self.init_toolbar()
 
-    def apply_stylesheet(self, is_dark=False):
-        """テーマの適用（ライトモード・ダークモード対応、選択状態の視認性向上）"""
-        if is_dark:
-            # ダークモード用カラー
-            bg_main = "#1E1E1E"
-            bg_toolbar = "#2D2D2D"
-            bg_view = "#121212"
-            text_main = "#E0E0E0"
-            border_toolbar = "#3F3F3F"
-            selection_bg = "#0078D7"
-            selection_text = "#FFFFFF"
-            hover_bg = "#3D3D3D"
-            combo_bg = "#333333"
-            dialog_bg = "#252526"
-        else:
-            # 通常モード（ライト）用カラー
-            bg_main = "#F5F6F7"
-            bg_toolbar = "#FFFFFF"
-            bg_view = "#D0D7DE"
-            text_main = "#333333"
-            border_toolbar = "#D0D0D0"
-            selection_bg = "#005FB8" # 濃い目の青にして選択状態をはっきりさせる
-            selection_text = "#FFFFFF"
-            hover_bg = "#E9E9E9"
-            combo_bg = "#FFFFFF"
-            dialog_bg = "#F5F6F7"
+    def apply_stylesheet(self):
+        """通常モード（ライト）のスタイル適用"""
+        bg_main = "#F5F6F7"
+        bg_toolbar = "#FFFFFF"
+        bg_view = "#D0D7DE"
+        text_main = "#333333"
+        border_toolbar = "#D0D0D0"
+        selection_bg = "#005FB8" # 濃い目の青にして選択状態をはっきりさせる
+        selection_text = "#FFFFFF"
+        hover_bg = "#E9E9E9"
+        combo_bg = "#FFFFFF"
+        dialog_bg = "#F5F6F7"
 
         style = f"""
         QMainWindow {{
@@ -1607,13 +1592,6 @@ class AdvancedAnnotationApp(QMainWindow):
         """
         self.setStyleSheet(style)
 
-    def toggle_theme(self):
-        """通常モード（ライト）とダークモードを切り替える"""
-        self.is_dark = not self.is_dark
-        self.apply_stylesheet(self.is_dark)
-        # アイコンを更新
-        self.theme_action.setText("🌙" if not self.is_dark else "☀️")
-
 
     def init_menubar(self):
         """メニューバーを構築し、ヘルプメニューを追加する"""
@@ -1684,6 +1662,12 @@ class AdvancedAnnotationApp(QMainWindow):
         save_as_action.triggered.connect(self.save_file_as)
         toolbar1.addAction(save_as_action)
 
+        # 2. プロジェクトの個別保存
+        save_project_action = QAction("📦 プロジェクト保存", self)
+        save_project_action.setShortcut("Ctrl+P")
+        save_project_action.triggered.connect(self.save_project)
+        toolbar1.addAction(save_project_action)
+
         open_action = QAction("📂 開く", self)
         open_action.setShortcut("Ctrl+O")
         open_action.triggered.connect(self.open_file)
@@ -1736,13 +1720,6 @@ class AdvancedAnnotationApp(QMainWindow):
         self.next_page_action.triggered.connect(lambda: self.change_page(1))
         self.next_page_action.setEnabled(False)
         toolbar1.addAction(self.next_page_action)
-
-        toolbar1.addSeparator()
-
-        # テーマ切り替えボタン
-        self.theme_action = QAction("🌙" if not self.is_dark else "☀️", self)
-        self.theme_action.triggered.connect(self.toggle_theme)
-        toolbar1.addAction(self.theme_action)
 
         # 改行を入れてツールバーを2段にする
         self.addToolBarBreak(Qt.ToolBarArea.TopToolBarArea)
@@ -2230,7 +2207,7 @@ class AdvancedAnnotationApp(QMainWindow):
             if new_w < 10: new_w = 10
             if new_h < 10: new_h = 10
             
-            # 新しい背景QPixmapの作成
+            # 新しい背景QPixmap of 作成
             new_pixmap = QPixmap(new_w, new_h)
             new_pixmap.fill(color)
             
@@ -2285,18 +2262,16 @@ class AdvancedAnnotationApp(QMainWindow):
             QMessageBox.critical(self, "エラー", f"余白追加・削減の実行中にエラーが発生しました。\n{e}")
 
     def save_file(self):
-        """上書き保存（パスがない場合は新規保存へ）"""
-        if not self.current_file_path or self.current_ext == ".pdf":
-            # PDFからの書き出し、または新規の場合はダイアログを出す
+        """開いたファイル形式と同じ形式で上書き保存（パスがない場合は新規画像保存へ）"""
+        if not self.current_file_path:
             return self.save_file_as()
         
-        # 上書き保存の実行
+        # 開いたファイル形式と同じ形式で上書き保存を実行
         self.perform_actual_save(self.current_file_path)
 
     def save_file_as(self):
-        """名前を付けて保存"""
-        default_ext = self.current_ext
-        if not default_ext: default_ext = ".hwi"
+        """名前を付けて保存（エクスポート専用、デフォルトは.jpg）"""
+        default_ext = ".jpg"
         
         initial_name = f"{self.current_filename}_After{default_ext}"
         if not self.current_filename:
@@ -2304,17 +2279,33 @@ class AdvancedAnnotationApp(QMainWindow):
 
         initial_path = os.path.join(self.current_dir, initial_name) if self.current_dir else initial_name
         
-        if default_ext == ".png":
-            filter_str = "PNG Image (*.png);;JPEG Image (*.jpg);;PDF Document (*.pdf);;HandwrittenImage Projects (*.hwi)"
-        elif default_ext == ".pdf":
-            filter_str = "PDF Document (*.pdf);;JPEG Image (*.jpg);;PNG Image (*.png);;HandwrittenImage Projects (*.hwi)"
-        elif default_ext == ".hwi":
-            filter_str = "HandwrittenImage Projects (*.hwi);;JPEG Image (*.jpg);;PNG Image (*.png);;PDF Document (*.pdf)"
-        else:
-            filter_str = "HandwrittenImage Projects (*.hwi);;JPEG Image (*.jpg);;PNG Image (*.png);;PDF Document (*.pdf)"
+        # フィルタに.hwiは含めず、画像/PDFのみとする。かつデフォルトを.jpgにする
+        filter_str = "JPEG Image (*.jpg);;PNG Image (*.png);;PDF Document (*.pdf)"
         
         file_path, selected_filter = QFileDialog.getSaveFileName(
             self, "名前を付けて保存", initial_path, filter_str
+        )
+        if not file_path:
+            return
+
+        self.perform_actual_save(file_path)
+
+    def save_project(self):
+        """プロジェクト（.hwi）を上書き保存（既存の.hwiパスがない場合は名前を付けて保存へ）"""
+        if self.current_file_path and self.current_ext == ".hwi":
+            self.perform_actual_save(self.current_file_path)
+        else:
+            self.save_project_as()
+
+    def save_project_as(self):
+        """名前を付けてプロジェクト（.hwi）を保存"""
+        default_ext = ".hwi"
+        initial_name = f"{self.current_filename}{default_ext}" if self.current_filename else f"untitled{default_ext}"
+        initial_path = os.path.join(self.current_dir, initial_name) if self.current_dir else initial_name
+        
+        filter_str = "HandwrittenImage Projects (*.hwi)"
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "プロジェクトを保存", initial_path, filter_str
         )
         if not file_path:
             return
