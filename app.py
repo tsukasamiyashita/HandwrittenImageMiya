@@ -832,6 +832,12 @@ class AnnotationScene(QGraphicsScene):
             menu.addSeparator()
             edit_text_action = menu.addAction("テキストを編集")
 
+        # 挿入画像用のコンテキストメニューを追加
+        reset_aspect_action = None
+        if isinstance(target_item, CustomPixmapItem):
+            menu.addSeparator()
+            reset_aspect_action = menu.addAction("🔄 縦横比を元に戻す")
+
         action = menu.exec(event.screenPos())
 
         if action == bring_front_action:
@@ -842,6 +848,22 @@ class AnnotationScene(QGraphicsScene):
             self.paste_item(pos)
         elif edit_text_action and action == edit_text_action:
             self.edit_text_item(target_item)
+        elif reset_aspect_action and action == reset_aspect_action:
+            self.reset_pixmap_aspect(target_item)
+
+    def reset_pixmap_aspect(self, item):
+        """挿入された画像の縦横比をオリジナルに合わせて復元する"""
+        if isinstance(item, CustomPixmapItem):
+            orig_w = float(item.original_pixmap.width())
+            orig_h = float(item.original_pixmap.height())
+            if orig_w > 0 and orig_h > 0:
+                current_rect = item.rect()
+                # 現在の表示幅を基準とし、高さ側をオリジナル画像比率に補正
+                new_h = current_rect.width() * (orig_h / orig_w)
+                item.setRect(QRectF(current_rect.left(), current_rect.top(), current_rect.width(), new_h))
+                self.has_unsaved_changes = True
+                self.save_state()
+                self.update()
 
     def copy_item(self, item):
         if isinstance(item, ArrowItem):
