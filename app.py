@@ -648,7 +648,7 @@ class AnnotationScene(QGraphicsScene):
                     elif mode == "top_right":
                         anchor = start_rect.bottomLeft()
                         dx = pos.x() - anchor.x()
-                        dy = anchor.y() - pos.y()
+                        dy = pos.y() - anchor.y()
                         sign_x = 1 if dx >= 0 else -1
                         sign_y = 1 if dy >= 0 else -1
                         val = max(abs(dx), abs(dy) * r)
@@ -1204,7 +1204,7 @@ class AdvancedAnnotationApp(QMainWindow):
     def show_version_info(self):
         """バージョン情報をメッセージボックスで表示する"""
         title = "HandwrittenImageMiya"
-        version = "v1.3.0"
+        version = "v1.4.0"
         msg = f"{title}\nバージョン: {version}\n\nPyQt6ベースの高機能アノテーションツール"
         QMessageBox.about(self, "バージョン情報", msg)
 

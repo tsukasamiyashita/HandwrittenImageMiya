@@ -27,14 +27,14 @@ jobs:
 
     # PyInstallerでexe化の実行
 
-    # --neme ""をフォルダ名に修正必要
+    # --name ""をフォルダ名に修正必要
     - name: Build with PyInstaller
       run: >
         pyinstaller 
         --onefile 
         --noconsole 
         --clean 
-        --name "HandwrittenImageMiya-v1.3.0" 
+        --name "HandwrittenImageMiya-v1.4.0" 
         --icon "icon.ico" 
         --add-data "readme.md;."
         --add-data "icon.ico;."
@@ -45,10 +45,10 @@ jobs:
 
     # 完成したexeファイルをGitHub上にアップロード
 
-    # naem: フォルダ名に修正必要
+    # name: フォルダ名に修正必要
     # path: dist/ファイル名.exe → ファイル名修正必要
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: HandwrittenImageMiya-v1.3.0
-        path: dist/HandwrittenImageMiya-v1.3.0.exe
+        name: HandwrittenImageMiya-v1.4.0
+        path: dist/HandwrittenImageMiya-v1.4.0.exe
