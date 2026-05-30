@@ -32,6 +32,39 @@ def resource_path(relative_path):
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
 
+
+class CustomGraphicsView(QGraphicsView):
+    """拡大縮小、横スクロールのジェスチャに対応したカスタムQGraphicsView"""
+    def __init__(self, scene, parent=None):
+        super().__init__(scene, parent)
+        self.setRenderHint(QPainter.RenderHint.Antialiasing)
+        self.setDragMode(QGraphicsView.DragMode.NoDrag)
+        self.setMouseTracking(True) # マウス追従プレビューのために必要
+
+    def wheelEvent(self, event):
+        modifiers = event.modifiers()
+        
+        # Ctrl + 上下スクロール = 拡大・縮小
+        if modifiers & Qt.KeyboardModifier.ControlModifier:
+            angle = event.angleDelta().y()
+            factor = 1.25 if angle > 0 else 0.8
+            self.scale(factor, factor)
+            event.accept()
+            
+        # Shift + 上下スクロール = 横スクロール
+        elif modifiers & Qt.KeyboardModifier.ShiftModifier:
+            angle = event.angleDelta().y()
+            h_bar = self.horizontalScrollBar()
+            if h_bar:
+                # スクロールバーの位置を調節
+                h_bar.setValue(h_bar.value() - angle)
+            event.accept()
+            
+        else:
+            # 通常のスクロール動作（上下スクロール）
+            super().wheelEvent(event)
+
+
 class CustomLineItem(QGraphicsLineItem):
     """線を描画し、当たり判定（ドラッグ範囲）を広げたカスタムアイテム"""
     def __init__(self, line, pen):
@@ -1175,10 +1208,7 @@ class AdvancedAnnotationApp(QMainWindow):
         self.scene = AnnotationScene(self)
         self.scene.selectionChanged.connect(self.sync_properties_from_selection)
 
-        self.view = QGraphicsView(self.scene)
-        self.view.setRenderHint(QPainter.RenderHint.Antialiasing)
-        self.view.setDragMode(QGraphicsView.DragMode.NoDrag)
-        self.view.setMouseTracking(True) # マウス追従プレビューのために必要
+        self.view = CustomGraphicsView(self.scene, self)
         self.setCentralWidget(self.view)
 
         self.current_pdf_doc = None
@@ -1940,7 +1970,7 @@ class AdvancedAnnotationApp(QMainWindow):
             QMessageBox.critical(self, "エラー", f"画像の挿入中にエラーが発生しました。\n{e}")
 
     def apply_margin(self, top, bottom, left, right, color):
-        """余白を作成・削減して背景画像に適用し、既存 of 注釈をシフトして位置を補正する"""
+        """余白を作成・削減して背景画像に適用し、既存の注釈をシフトして位置を補正する"""
         try:
             current_bg_pixmap = self.scene.bg_item.pixmap()
             orig_w = current_bg_pixmap.width()
