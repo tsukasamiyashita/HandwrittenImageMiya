@@ -1641,7 +1641,7 @@ class AdvancedAnnotationApp(QMainWindow):
     def show_version_info(self):
         """バージョン情報をメッセージボックスで表示する"""
         title = "HandwrittenImageMiya"
-        version = "v1.4.0"
+        version = "v1.5.0"
         msg = f"{title}\nバージョン: {version}\n\nPyQt6ベースの高機能アノテーションツール"
         QMessageBox.about(self, "バージョン情報", msg)
 
