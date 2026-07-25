@@ -1,4 +1,3 @@
-# app.pyw
 import sys
 import os
 import math
@@ -20,9 +19,6 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtCore import Qt, QPointF, QRectF, QLineF, QTimer, QBuffer, QByteArray, QIODevice
 
-# ==============================
-# リソースパス取得関数 (exe化対応)
-# ==============================
 def resource_path(relative_path):
     """実行時（exe）でも通常時（.pyw）でも正しいファイルパスを取得する"""
     try:
@@ -100,6 +96,7 @@ class ArrowItem(CustomLineItem):
         painter.setPen(self.pen())
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawPolyline(QPolygonF([p1, line.p2(), p2]))
+
 
 class CustomPathItem(QGraphicsPathItem):
     """フリーハンドを描画し、当たり判定を広げたカスタムアイテム"""
@@ -261,15 +258,12 @@ class MarginHandleItem(QGraphicsRectItem):
             new_rect = QRectF(self.orig_rect)
             min_size = 50.0 # 削りすぎ防止の最小サイズガード（50px）
             
-            # シーン座標系におけるオリジナル画像の領域を取得（これより内側に縮めてはならない）
             orig_img_rect = getattr(self.parent_scene, 'original_image_rect', None)
             
-            # 引っ張る・押し込む方向に応じてプレビュー矩形を拡張・縮小。かつ、オリジナル画像領域を超えて狭められないようにガード
             if self.side == 'top':
                 new_top = self.orig_rect.top() + delta.y()
                 if new_top > self.orig_rect.bottom() - min_size:
                     new_top = self.orig_rect.bottom() - min_size
-                # オリジナル画像より下（内側）に境界をめり込ませないガード
                 if orig_img_rect and new_top > orig_img_rect.top():
                     new_top = orig_img_rect.top()
                 new_rect.setTop(new_top)
@@ -277,7 +271,6 @@ class MarginHandleItem(QGraphicsRectItem):
                 new_bottom = self.orig_rect.bottom() + delta.y()
                 if new_bottom < self.orig_rect.top() + min_size:
                     new_bottom = self.orig_rect.top() + min_size
-                # オリジナル画像より上（内側）に境界をめり込ませないガード
                 if orig_img_rect and new_bottom < orig_img_rect.bottom():
                     new_bottom = orig_img_rect.bottom()
                 new_rect.setBottom(new_bottom)
@@ -285,7 +278,6 @@ class MarginHandleItem(QGraphicsRectItem):
                 new_left = self.orig_rect.left() + delta.x()
                 if new_left > self.orig_rect.right() - min_size:
                     new_left = self.orig_rect.right() - min_size
-                # オリジナル画像より右（内側）に境界をめり込ませないガード
                 if orig_img_rect and new_left > orig_img_rect.left():
                     new_left = orig_img_rect.left()
                 new_rect.setLeft(new_left)
@@ -293,7 +285,6 @@ class MarginHandleItem(QGraphicsRectItem):
                 new_right = self.orig_rect.right() + delta.x()
                 if new_right < self.orig_rect.left() + min_size:
                     new_right = self.orig_rect.left() + min_size
-                # オリジナル画像より左（内側）に境界をめり込ませないガード
                 if orig_img_rect and new_right < orig_img_rect.right():
                     new_right = orig_img_rect.right()
                 new_rect.setRight(new_right)
@@ -310,7 +301,6 @@ class MarginHandleItem(QGraphicsRectItem):
             self.preview_rect = None
             self.press_pos = None
             
-            # 拡張（正値）または削減（負値）のピクセル数を算出
             top_margin = int(self.orig_rect.top() - final_rect.top())
             bottom_margin = int(final_rect.bottom() - self.orig_rect.bottom())
             left_margin = int(self.orig_rect.left() - final_rect.left())
@@ -319,7 +309,6 @@ class MarginHandleItem(QGraphicsRectItem):
             if top_margin != 0 or bottom_margin != 0 or left_margin != 0 or right_margin != 0:
                 main_win = self.parent_scene.parent()
                 if hasattr(main_win, 'apply_margin'):
-                    # 現在設定されている「背景/塗色」を余白背景色として使用する（透過の場合は白）
                     color = self.parent_scene.current_brush_color if self.parent_scene.use_fill else QColor(Qt.GlobalColor.white)
                     main_win.apply_margin(top_margin, bottom_margin, left_margin, right_margin, color)
             event.accept()
@@ -335,12 +324,15 @@ class AnnotationScene(QGraphicsScene):
         self.current_line_type = "line"
         self.current_shape_type = "rect"
         
-        # 枠線・文字色と、塗りつぶし・背景色を分離
+        # 色管理（ペン・文字・ブラシ）
         self.current_pen_color = QColor(Qt.GlobalColor.red)
-        self.current_text_color = QColor(Qt.GlobalColor.red) # 文字色を追加
+        self.current_text_color = QColor(Qt.GlobalColor.red)
         self.current_brush_color = QColor(Qt.GlobalColor.white)
         self.use_fill = False
-        self.pen_width = 5.0
+        
+        # 図形線太さと文字サイズを明確に分離
+        self.pen_width = 5.0          # 図形/線の太さ
+        self.current_font_size = 24.0 # 文字のフォントサイズ (pt)
         
         self.start_point = None
         self.temp_item = None
@@ -361,14 +353,9 @@ class AnnotationScene(QGraphicsScene):
         self.copied_data = None
         
         self.has_unsaved_changes = False
-        
-        # 余白ドラッグ用ハンドルのリスト
         self.margin_handles = []
-        
-        # オリジナル画像自体の領域（シーン座標系。これ以下には削れなくする）
         self.original_image_rect = QRectF()
         
-        # Undo/Redo用のスタック
         self.undo_stack = []
         self.redo_stack = []
         self.was_modified = False
@@ -389,6 +376,7 @@ class AnnotationScene(QGraphicsScene):
         self.has_unsaved_changes = True
         self.save_state()
         self.update()
+
 
     def get_scene_state(self):
         """現在のシーンのアイテム状態をシリアライズして取得"""
@@ -522,7 +510,6 @@ class AnnotationScene(QGraphicsScene):
         self.bg_item.setFlags(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable ^ QGraphicsItem.GraphicsItemFlag.ItemIsFocusable) 
         self.setSceneRect(QRectF(pixmap.rect()))
         
-        # オリジナル画像のサイズ範囲を保存
         self.original_image_rect = QRectF(0, 0, pixmap.width(), pixmap.height())
         
         self.undo_stack.clear()
@@ -535,10 +522,9 @@ class AnnotationScene(QGraphicsScene):
         self.clear_margin_handles()
         if self.current_tool == "margin" and self.bg_item:
             r = self.sceneRect()
-            thickness = 24.0 # 操作しやすいように少し太めのサイズに設定
+            thickness = 24.0
             half = thickness / 2.0
             
-            # 画像の境界線を跨ぐ形で配置し、視覚的に掴みやすいレイアウトに改善
             top_h = MarginHandleItem('top', QRectF(r.left(), r.top() - half, r.width(), thickness), self)
             bot_h = MarginHandleItem('bottom', QRectF(r.left(), r.bottom() - half, r.width(), thickness), self)
             left_h = MarginHandleItem('left', QRectF(r.left() - half, r.top(), thickness, r.height()), self)
@@ -553,6 +539,7 @@ class AnnotationScene(QGraphicsScene):
         for h in self.margin_handles:
             self.removeItem(h)
         self.margin_handles.clear()
+
 
     def drawForeground(self, painter, rect):
         """選択アイテムにサイズ変更用のハンドルを描画"""
@@ -573,7 +560,6 @@ class AnnotationScene(QGraphicsScene):
                 painter.drawRect(QRectF(br.x() - handle_size/2, br.y() - handle_size/2, handle_size, handle_size))
             elif isinstance(item, CustomPixmapItem):
                 local_rect = item.rect()
-                # 四つ角と四辺の合計8箇所にリサイズハンドルを描画
                 handles = [
                     local_rect.topLeft(), local_rect.topRight(),
                     local_rect.bottomLeft(), local_rect.bottomRight(),
@@ -620,7 +606,6 @@ class AnnotationScene(QGraphicsScene):
                 event.accept()
                 return
 
-        # 余白ドラッグモードの時は、グラフィックスアイテム（MarginHandleItem）へイベントを透過する
         if self.current_tool == "margin":
             super().mousePressEvent(event)
             return
@@ -642,7 +627,6 @@ class AnnotationScene(QGraphicsScene):
                 
                 if isinstance(item, CustomPixmapItem):
                     local_rect = item.rect()
-                    # 8方向の各ハンドルとマウスカーソルとのヒットテスト
                     handles = {
                         "top_left": local_rect.topLeft(),
                         "top_right": local_rect.topRight(),
@@ -750,14 +734,13 @@ class AnnotationScene(QGraphicsScene):
                 self.temp_item.setZValue(self.get_next_z_value())
                 self.addItem(self.temp_item)
 
+
     def mouseMoveEvent(self, event):
-        # プレビューテキストの追従
         if self.current_tool == "text" and getattr(self, 'pending_text_item', None):
             self.pending_text_item.setPos(event.scenePos())
             event.accept()
             return
 
-        # 余白ドラッグモードの時は、グラフィックスアイテム（MarginHandleItem）へイベントを透過する
         if self.current_tool == "margin":
             super().mouseMoveEvent(event)
             return
@@ -842,10 +825,8 @@ class AnnotationScene(QGraphicsScene):
                 if self.resize_mode.startswith("pixmap_"):
                     mode = self.resize_mode.replace("pixmap_", "")
                     start_rect = self.start_scene_rect
-                    # 初期ドラッグ開始時点のアスペクト比を計算
                     r = start_rect.width() / max(1.0, start_rect.height())
 
-                    # 1. 四つ角ドラッグの場合：アスペクト比を固定してリサイズ
                     if mode == "bottom_right":
                         anchor = start_rect.topLeft()
                         dx = pos.x() - anchor.x()
@@ -887,7 +868,6 @@ class AnnotationScene(QGraphicsScene):
                         new_h = sign_y * val / r
                         new_scene_rect = QRectF(anchor.x() - new_w, anchor.y(), new_w, new_h).normalized()
                     
-                    # 2. 四辺ドラッグの場合：対応する軸の比率を自由に変更
                     elif mode == "right":
                         new_w = pos.x() - start_rect.left()
                         new_scene_rect = QRectF(start_rect.left(), start_rect.top(), new_w, start_rect.height()).normalized()
@@ -901,7 +881,6 @@ class AnnotationScene(QGraphicsScene):
                         new_h = start_rect.bottom() - pos.y()
                         new_scene_rect = QRectF(start_rect.left(), pos.y(), start_rect.width(), new_h).normalized()
 
-                    # 新しいシーン座標系での矩形をオブジェクトに反映
                     item.setPos(new_scene_rect.topLeft())
                     item.setRect(QRectF(0, 0, new_scene_rect.width(), new_scene_rect.height()))
 
@@ -980,7 +959,6 @@ class AnnotationScene(QGraphicsScene):
                     self.temp_item.setPolygon(QPolygonF([p1, p2, p3]))
 
     def mouseReleaseEvent(self, event):
-        # 余白ドラッグモードの時は、グラフィックスアイテム（MarginHandleItem）へイベントを透過する
         if self.current_tool == "margin":
             super().mouseReleaseEvent(event)
             return
@@ -1028,6 +1006,7 @@ class AnnotationScene(QGraphicsScene):
         else:
             super().keyPressEvent(event)
 
+
     def contextMenuEvent(self, event):
         if self.current_tool != "select":
             super().contextMenuEvent(event)
@@ -1058,7 +1037,6 @@ class AnnotationScene(QGraphicsScene):
             menu.addSeparator()
             edit_text_action = menu.addAction("テキストを編集")
 
-        # 挿入画像用のコンテキストメニューを追加
         reset_aspect_action = None
         if isinstance(target_item, CustomPixmapItem):
             menu.addSeparator()
@@ -1084,7 +1062,6 @@ class AnnotationScene(QGraphicsScene):
             orig_h = float(item.original_pixmap.height())
             if orig_w > 0 and orig_h > 0:
                 current_rect = item.rect()
-                # 現在の表示幅を基準とし、高さ側をオリジナル画像比率に補正
                 new_h = current_rect.width() * (orig_h / orig_w)
                 item.setRect(QRectF(current_rect.left(), current_rect.top(), current_rect.width(), new_h))
                 self.has_unsaved_changes = True
@@ -1191,9 +1168,6 @@ class AnnotationScene(QGraphicsScene):
                 self.save_state()
 
 
-# ==========================================
-# 専用ファイル形式（.hwi）シリアライズ処理
-# ==========================================
 def color_to_hex(color):
     return color.name(QColor.NameFormat.HexArgb)
 
@@ -1433,12 +1407,10 @@ class AdvancedAnnotationApp(QMainWindow):
         self.setWindowTitle("HandwrittenImageMiya")
         self.setGeometry(100, 100, 1200, 800)
         
-        # アイコンの設定
         icon_path = resource_path("icon.ico")
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
         
-        # 画面のスタイル（デザイン）を適用（ライトモードに固定）
         self.apply_stylesheet()
 
         self.scene = AnnotationScene(self)
@@ -1452,10 +1424,11 @@ class AdvancedAnnotationApp(QMainWindow):
         self.current_filename = "" 
         self.current_dir = "" 
         self.current_ext = "" 
-        self.current_file_path = "" # 現在開いている、または保存済みのファイルのフルパス
+        self.current_file_path = ""
 
         self.init_menubar()
         self.init_toolbar()
+
 
     def apply_stylesheet(self):
         """通常モード（ライト）のスタイル適用"""
@@ -1464,7 +1437,7 @@ class AdvancedAnnotationApp(QMainWindow):
         bg_view = "#D0D7DE"
         text_main = "#333333"
         border_toolbar = "#D0D0D0"
-        selection_bg = "#005FB8" # 濃い目の青にして選択状態をはっきりさせる
+        selection_bg = "#005FB8"
         selection_text = "#FFFFFF"
         hover_bg = "#E9E9E9"
         combo_bg = "#FFFFFF"
@@ -1474,7 +1447,6 @@ class AdvancedAnnotationApp(QMainWindow):
         QMainWindow {{
             background-color: {bg_main};
         }}
-        /* メニューバー */
         QMenuBar {{
             background-color: {bg_toolbar};
             border-bottom: 1px solid {border_toolbar};
@@ -1502,14 +1474,12 @@ class AdvancedAnnotationApp(QMainWindow):
             background-color: {selection_bg};
             color: {selection_text};
         }}
-        /* ツールバー */
         QToolBar {{
             background-color: {bg_toolbar};
             border-bottom: 1px solid {border_toolbar};
             spacing: 4px;
             padding: 4px;
         }}
-        /* ツールバーのボタン（選択状態を強調） */
         QToolButton {{
             color: {text_main};
             font-size: 12px;
@@ -1529,7 +1499,6 @@ class AdvancedAnnotationApp(QMainWindow):
             color: {selection_text};
             font-weight: bold;
         }}
-        /* コンボボックス */
         QComboBox {{
             border: 1px solid {border_toolbar};
             border-radius: 4px;
@@ -1538,24 +1507,21 @@ class AdvancedAnnotationApp(QMainWindow):
             color: {text_main};
             font-size: 12px;
             min-height: 20px;
-            min-width: 80px;
+            min-width: 65px;
         }}
         QComboBox:hover, QComboBox:focus {{
             border: 1px solid {selection_bg};
         }}
-        /* ツールバー内のラベル */
         QToolBar QLabel {{
             color: {text_main};
             font-weight: bold;
             padding-left: 4px;
             font-size: 12px;
         }}
-        /* 画像表示エリア（キャンバスの外側） */
         QGraphicsView {{
             background-color: {bg_view};
             border: none;
         }}
-        /* ダイアログ全般 */
         QDialog, QMessageBox {{
             background-color: {dialog_bg};
             color: {text_main};
@@ -1622,7 +1588,6 @@ class AdvancedAnnotationApp(QMainWindow):
         else:
             content = f"readme.md ファイルが見つかりませんでした。\n検索パス: {readme_path}"
 
-        # テキストを表示するためのダイアログを作成
         dialog = QDialog(self)
         dialog.setWindowTitle("Readme")
         dialog.resize(600, 450)
@@ -1630,7 +1595,7 @@ class AdvancedAnnotationApp(QMainWindow):
         
         text_edit = QTextEdit(dialog)
         text_edit.setPlainText(content)
-        text_edit.setReadOnly(True) # 編集不可に設定
+        text_edit.setReadOnly(True)
         font = QFont("Consolas", 10)
         font.setStyleHint(QFont.StyleHint.Monospace)
         text_edit.setFont(font)
@@ -1644,6 +1609,7 @@ class AdvancedAnnotationApp(QMainWindow):
         version = "v1.5.0"
         msg = f"{title}\nバージョン: {version}\n\nPyQt6ベースの高機能アノテーションツール"
         QMessageBox.about(self, "バージョン情報", msg)
+
 
     def init_toolbar(self):
         # ＝＝＝ 1段目のツールバー（ファイル操作、表示、ページ遷移） ＝＝＝
@@ -1705,7 +1671,6 @@ class AdvancedAnnotationApp(QMainWindow):
         zoom_fit_action.triggered.connect(self.fit_to_view)
         toolbar1.addAction(zoom_fit_action)
 
-        # 右端に寄せるためのスペーサー
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         toolbar1.addWidget(spacer)
@@ -1721,10 +1686,9 @@ class AdvancedAnnotationApp(QMainWindow):
         self.next_page_action.setEnabled(False)
         toolbar1.addAction(self.next_page_action)
 
-        # 改行を入れてツールバーを2段にする
         self.addToolBarBreak(Qt.ToolBarArea.TopToolBarArea)
 
-        # ＝＝＝ 2段目のツールバー（描画ツール、色、太さ） ＝＝＝
+        # ＝＝＝ 2段目のツールバー（描画ツール、色、太さ・サイズ） ＝＝＝
         toolbar2 = QToolBar("Draw Toolbar")
         toolbar2.setMovable(False)
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, toolbar2)
@@ -1766,12 +1730,10 @@ class AdvancedAnnotationApp(QMainWindow):
         toolbar2.addAction(act_text)
         self.tool_actions["text"] = act_text
 
-        # ＝＝＝ 画像挿入アクション ＝＝＝
         act_insert_img = QAction("🖼️ 画像挿入", self)
         act_insert_img.triggered.connect(self.insert_image)
         toolbar2.addAction(act_insert_img)
 
-        # ＝＝＝ ドラッグ余白追加アクション ＝＝＝
         act_add_margin = QAction("⏹️ 余白調整(ドラッグ)", self)
         act_add_margin.setCheckable(True)
         act_add_margin.triggered.connect(lambda checked: self.set_tool("margin"))
@@ -1781,7 +1743,6 @@ class AdvancedAnnotationApp(QMainWindow):
         self.tool_actions["select"].setChecked(True)
         toolbar2.addSeparator()
 
-        # 削除ボタン
         delete_action = QAction("🗑️ 削除", self)
         delete_action.setShortcut("Del")
         delete_action.triggered.connect(self.scene.delete_selected_items)
@@ -1807,7 +1768,10 @@ class AdvancedAnnotationApp(QMainWindow):
         self.fill_combo.currentIndexChanged.connect(self.change_fill_mode)
         toolbar2.addWidget(self.fill_combo)
 
-        toolbar2.addWidget(QLabel("🖊️ サイズ: "))
+        toolbar2.addSeparator()
+
+        # --- 図形・線の太さコントロール (分離) ---
+        toolbar2.addWidget(QLabel("🖊️ 線太さ:"))
         self.width_combo = QComboBox(self)
         self.width_combo.setEditable(True) 
         width_options = ["0.5", "1.0", "1.5", "2.0", "3.0", "4.0", "5.0", "6.0", "8.0", "10.0", "12.0", "15.0", "20.0", "30.0", "50.0"]
@@ -1816,19 +1780,27 @@ class AdvancedAnnotationApp(QMainWindow):
         self.width_combo.currentTextChanged.connect(self.change_pen_width_text)
         toolbar2.addWidget(self.width_combo)
 
+        # --- 文字のフォントサイズコントロール (分離) ---
+        toolbar2.addWidget(QLabel("🔤 文字サイズ:"))
+        self.font_size_combo = QComboBox(self)
+        self.font_size_combo.setEditable(True)
+        font_size_options = ["8", "10", "12", "14", "16", "18", "20", "24", "28", "32", "36", "48", "60", "72", "96", "120"]
+        self.font_size_combo.addItems(font_size_options)
+        self.font_size_combo.setCurrentText(str(int(self.scene.current_font_size)))
+        self.font_size_combo.currentTextChanged.connect(self.change_font_size_text)
+        toolbar2.addWidget(self.font_size_combo)
+
+
     def set_tool(self, tool_id):
-        # 他のツールに切り替わるときに、未確定のプレビューテキストがあれば削除する
         if tool_id != "text" and getattr(self.scene, 'pending_text_item', None):
             self.scene.removeItem(self.scene.pending_text_item)
             self.scene.pending_text_item = None
 
         if tool_id == "text":
-            # 先にテキスト入力を受け付ける
             text, ok = QInputDialog.getMultiLineText(self, "テキスト入力", "キャンバスに配置する文字を入力してください:")
             if ok and text:
-                # プレビュー用のアイテムを仮生成してシーンに追加
                 font = QFont("Arial")
-                font.setPointSizeF(max(6.0, self.scene.pen_width * 3.0))
+                font.setPointSizeF(max(4.0, self.scene.current_font_size))
                 
                 brush = QBrush(self.scene.current_brush_color) if self.scene.use_fill else QBrush(Qt.BrushStyle.NoBrush)
                 pen = QPen(self.scene.current_pen_color)
@@ -1846,7 +1818,6 @@ class AdvancedAnnotationApp(QMainWindow):
                 self.scene.addItem(text_item)
                 self.scene.pending_text_item = text_item
             else:
-                # キャンセルされたら「選択ツール」に戻す
                 self.set_tool("select")
                 return
 
@@ -1854,7 +1825,6 @@ class AdvancedAnnotationApp(QMainWindow):
         for tid, action in self.tool_actions.items():
             action.setChecked(tid == tool_id)
             
-        # 余白用ドラッグハンドルの表示切り替え
         self.scene.update_margin_handles()
 
         if tool_id == "select":
@@ -1893,6 +1863,7 @@ class AdvancedAnnotationApp(QMainWindow):
             self.view.fitInView(self.scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
 
     def sync_properties_from_selection(self):
+        """選択アイテムからの各種プロパティ（色・線の太さ・文字サイズ）同期処理"""
         items = self.scene.selectedItems()
         if not items:
             return
@@ -1902,6 +1873,7 @@ class AdvancedAnnotationApp(QMainWindow):
             return
 
         self.width_combo.blockSignals(True)
+        self.font_size_combo.blockSignals(True)
         self.fill_combo.blockSignals(True)
 
         if isinstance(item, (CustomLineItem, ArrowItem, CustomRectItem, CustomEllipseItem, CustomPolygonItem, CustomPathItem)):
@@ -1922,6 +1894,10 @@ class AdvancedAnnotationApp(QMainWindow):
             
         elif isinstance(item, CustomTextItem):
             self.scene.current_text_color = item.defaultTextColor()
+            font = item.font()
+            self.scene.current_font_size = font.pointSizeF()
+            self.font_size_combo.setCurrentText(str(round(self.scene.current_font_size, 1)))
+
             pen = item.pen()
             if pen.style() != Qt.PenStyle.NoPen:
                 self.scene.current_pen_color = pen.color()
@@ -1938,6 +1914,7 @@ class AdvancedAnnotationApp(QMainWindow):
                 self.fill_combo.setCurrentIndex(0)
 
         self.width_combo.blockSignals(False)
+        self.font_size_combo.blockSignals(False)
         self.fill_combo.blockSignals(False)
 
     def choose_pen_color(self):
@@ -2016,7 +1993,9 @@ class AdvancedAnnotationApp(QMainWindow):
             self.scene.has_unsaved_changes = True
             self.scene.save_state()
 
+
     def change_pen_width_text(self, text):
+        """線の太さ（図形/線）用コンボボックスの変更ハンドラ"""
         try:
             value = float(text)
             if value < 0.1: value = 0.1 
@@ -2025,6 +2004,7 @@ class AdvancedAnnotationApp(QMainWindow):
             pass 
 
     def change_pen_width(self, value):
+        """図形や線の太さ（枠線）を更新"""
         self.scene.pen_width = value
         changed = False
         for item in self.scene.selectedItems():
@@ -2034,17 +2014,38 @@ class AdvancedAnnotationApp(QMainWindow):
                 item.setPen(pen)
                 changed = True
             elif isinstance(item, CustomTextItem):
-                font = item.font()
-                font.setPointSizeF(max(6.0, value * 3.0))
-                item.setFont(font)
                 if item.pen().style() != Qt.PenStyle.NoPen:
                     pen = item.pen()
                     pen.setWidthF(value)
                     item.setPen(pen)
+                    changed = True
+        if changed:
+            self.scene.has_unsaved_changes = True
+            self.scene.save_state()
+
+    def change_font_size_text(self, text):
+        """文字サイズ（テキスト）用コンボボックスの変更ハンドラ"""
+        try:
+            value = float(text)
+            if value < 1.0: value = 1.0
+            self.change_font_size(value)
+        except ValueError:
+            pass
+
+    def change_font_size(self, value):
+        """テキストのフォントサイズを更新（図形の太さとは独立）"""
+        self.scene.current_font_size = value
+        changed = False
+        for item in self.scene.selectedItems():
+            if isinstance(item, CustomTextItem):
+                font = item.font()
+                font.setPointSizeF(value)
+                item.setFont(font)
                 changed = True
         if changed:
             self.scene.has_unsaved_changes = True
             self.scene.save_state()
+
 
     def check_unsaved_changes(self):
         if self.scene.has_unsaved_changes:
@@ -2123,6 +2124,7 @@ class AdvancedAnnotationApp(QMainWindow):
                 self.current_pdf_page = new_page
                 self.load_pdf_page()
 
+
     def insert_image(self):
         """外部画像またはPDFページを注釈としてキャンバスの中に挿入する"""
         default_dir = self.current_dir if self.current_dir else os.path.expanduser("~")
@@ -2167,7 +2169,6 @@ class AdvancedAnnotationApp(QMainWindow):
                 view_rect = self.view.viewport().rect()
                 scene_center = self.view.mapToScene(view_rect.center())
                 
-                # 初期配置時のサイズ決定（キャンバスを邪魔しないよう縮小スケーリング）
                 w = float(pixmap.width())
                 h = float(pixmap.height())
                 max_size = 300.0
@@ -2187,7 +2188,7 @@ class AdvancedAnnotationApp(QMainWindow):
                 
                 self.scene.has_unsaved_changes = True
                 self.scene.save_state()
-                self.set_tool("select") # 挿入後は自動的に移動可能な選択モードに戻る
+                self.set_tool("select")
             else:
                 QMessageBox.warning(self, "エラー", "ファイルの読み込みに失敗しました。")
         except Exception as e:
@@ -2203,15 +2204,12 @@ class AdvancedAnnotationApp(QMainWindow):
             new_w = orig_w + left + right
             new_h = orig_h + top + bottom
             
-            # 最低限の描画可能サイズ（10px）を下回らないよう制限
             if new_w < 10: new_w = 10
             if new_h < 10: new_h = 10
             
-            # 新しい背景QPixmap of 作成
             new_pixmap = QPixmap(new_w, new_h)
             new_pixmap.fill(color)
             
-            # 削減（負の余白）が発生した場合の切り出し矩形の算出
             src_x = -left if left < 0 else 0
             src_y = -top if top < 0 else 0
             src_w = orig_w - (-left if left < 0 else 0) - (-right if right < 0 else 0)
@@ -2220,16 +2218,13 @@ class AdvancedAnnotationApp(QMainWindow):
             if src_w < 1: src_w = 1
             if src_h < 1: src_h = 1
             
-            # 拡張（正の余白）が発生した場合の新しい貼り付け先座標
             dest_x = left if left >= 0 else 0
             dest_y = top if top >= 0 else 0
             
-            # 元画像を適切な切り出し矩形を用いてQPainterで描画（トリミングと余白追加を統合）
             painter = QPainter(new_pixmap)
             painter.drawPixmap(dest_x, dest_y, current_bg_pixmap, src_x, src_y, src_w, src_h)
             painter.end()
             
-            # 既存のすべての注釈アイテムの位置を補正シフト（削減・追加の方向に対応）
             items_to_move = []
             for item in self.scene.items():
                 if (item != self.scene.bg_item and 
@@ -2241,18 +2236,14 @@ class AdvancedAnnotationApp(QMainWindow):
             for item in items_to_move:
                 item.moveBy(float(left), float(top))
                 
-            # 背景のQPixmapとシーンサイズを更新
             self.scene.bg_item.setPixmap(new_pixmap)
             self.scene.setSceneRect(QRectF(new_pixmap.rect()))
             
-            # オリジナル画像のシーン内位置を補正（めり込み保護の境界判定のために平行シフト）
             if hasattr(self.scene, 'original_image_rect') and self.scene.original_image_rect:
                 self.scene.original_image_rect.translate(float(left), float(top))
             
-            # ドラッグハンドルの位置も同期的に更新
             self.scene.update_margin_handles()
             
-            # Undoスタックに保存して更新通知
             self.scene.has_unsaved_changes = True
             self.scene.save_state()
             self.scene.update()
@@ -2261,12 +2252,12 @@ class AdvancedAnnotationApp(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "エラー", f"余白追加・削減の実行中にエラーが発生しました。\n{e}")
 
+
     def save_file(self):
         """開いたファイル形式と同じ形式で上書き保存（パスがない場合は新規画像保存へ）"""
         if not self.current_file_path:
             return self.save_file_as()
         
-        # 開いたファイル形式と同じ形式で上書き保存を実行
         self.perform_actual_save(self.current_file_path)
 
     def save_file_as(self):
@@ -2279,7 +2270,6 @@ class AdvancedAnnotationApp(QMainWindow):
 
         initial_path = os.path.join(self.current_dir, initial_name) if self.current_dir else initial_name
         
-        # フィルタに.hwiは含めず、画像/PDFのみとする。かつデフォルトを.jpgにする
         filter_str = "JPEG Image (*.jpg);;PNG Image (*.png);;PDF Document (*.pdf)"
         
         file_path, selected_filter = QFileDialog.getSaveFileName(
@@ -2291,7 +2281,7 @@ class AdvancedAnnotationApp(QMainWindow):
         self.perform_actual_save(file_path)
 
     def save_project(self):
-        """プロジェクト（.hwi）を上書き保存（既存の.hwiパスがない場合は名前を付けて保存へ）"""
+        """プロジェクト（.hwi）を上書き保存"""
         if self.current_file_path and self.current_ext == ".hwi":
             self.perform_actual_save(self.current_file_path)
         else:
@@ -2326,7 +2316,6 @@ class AdvancedAnnotationApp(QMainWindow):
                 self.scene.pending_text_item = None
                 self.set_tool("select")
 
-            # プロジェクト形式（.hwi）としての書き出し
             if save_ext == ".hwi":
                 project_data = serialize_project(self.scene)
                 with open(file_path, "w", encoding="utf-8") as f:
@@ -2409,6 +2398,7 @@ class AdvancedAnnotationApp(QMainWindow):
             event.accept()
         else:
             event.ignore()
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
