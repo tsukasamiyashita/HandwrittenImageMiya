@@ -34,7 +34,7 @@ jobs:
         --onefile 
         --noconsole 
         --clean 
-        --name "HandwrittenImageMiya-v1.5.0" 
+        --name "HandwrittenImageMiya-v1.6.0" 
         --icon "icon.ico" 
         --add-data "readme.md;."
         --add-data "icon.ico;."
@@ -50,5 +50,5 @@ jobs:
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: HandwrittenImageMiya-v1.5.0
-        path: dist/HandwrittenImageMiya-v1.5.0.exe
+        name: HandwrittenImageMiya-v1.6.0
+        path: dist/HandwrittenImageMiya-v1.6.0.exe

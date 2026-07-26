@@ -27,7 +27,7 @@ PDF対応: PDFファイルを開いて、ページをめくりながら注釈を
 
 インストール・実行方法
 
-配布された HandwrittenImageMiya-v1.5.0.exe をフォルダから探します。
+配布された HandwrittenImageMiya-v1.6.0.exe をフォルダから探します。
 
 .exe ファイルをダブルクリックして起動します。
 

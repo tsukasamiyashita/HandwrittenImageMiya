@@ -1308,7 +1308,7 @@ def serialize_project(scene):
     original_image_rect = state['original_image_rect']
     
     project_data = {
-        'version': '1.5.0',
+        'version': '1.6.0',
         'bg_pixmap': bg_pixmap_base64,
         'bg_rect': [bg_rect.x(), bg_rect.y(), bg_rect.width(), bg_rect.height()],
         'original_image_rect': [original_image_rect.x(), original_image_rect.y(), original_image_rect.width(), original_image_rect.height()],
@@ -1606,10 +1606,9 @@ class AdvancedAnnotationApp(QMainWindow):
     def show_version_info(self):
         """バージョン情報をメッセージボックスで表示する"""
         title = "HandwrittenImageMiya"
-        version = "v1.5.0"
+        version = "v1.6.0"
         msg = f"{title}\nバージョン: {version}\n\nPyQt6ベースの高機能アノテーションツール"
         QMessageBox.about(self, "バージョン情報", msg)
-
 
     def init_toolbar(self):
         # ＝＝＝ 1段目のツールバー（ファイル操作、表示、ページ遷移） ＝＝＝
