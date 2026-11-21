@@ -3,7 +3,10 @@ import os
 import math
 import json
 import tempfile
-import fitz  # PyMuPDF
+try:
+    import pymupdf
+except ImportError:
+    import fitz as pymupdf
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QGraphicsView, QGraphicsScene,
     QToolBar, QFileDialog, QInputDialog, QColorDialog, QFontDialog,
@@ -12,27 +15,39 @@ from PyQt6.QtWidgets import (
     QGraphicsSimpleTextItem, QGraphicsItem, QMessageBox, QLabel, QMenu,
     QComboBox, QWidget, QSizePolicy, QDialog, QVBoxLayout, QTextBrowser,
     QPushButton, QHBoxLayout, QStatusBar, QFormLayout, QSpinBox,
-    QDialogButtonBox, QLineEdit, QTextEdit
+    QDialogButtonBox, QLineEdit, QTextEdit, QCheckBox, QToolButton, QFrame,
+    QTabWidget
 )
 from PyQt6.QtGui import (
     QPixmap, QImage, QPainter, QPen, QColor, QPolygonF, QFont, QAction,
     QActionGroup, QTransform, QPainterPath, QPainterPathStroker, QImageReader,
     QBrush, QPalette, QIcon, QCursor, QDoubleValidator, QKeySequence,
-    QGuiApplication
+    QGuiApplication, QFontMetricsF
 )
 from PyQt6.QtCore import (
     Qt, QPointF, QRectF, QLineF, QTimer, QBuffer, QByteArray, QIODevice,
-    QSettings, pyqtSignal, QSize
+    QSettings, pyqtSignal, QSize, QRect, QPoint
 )
 
 APP_NAME = "HandwrittenImageMiya"
-APP_VERSION = "v1.6.0"
-PROJECT_FORMAT_VERSION = "1.6.0"
+APP_VERSION = "v2.0.0"
+PROJECT_FORMAT_VERSION = "2.0.0"
 DEFAULT_FONT_FAMILY = "Meiryo UI"
 SUPPORTED_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp"}
 SUPPORTED_OPEN_EXTS = SUPPORTED_IMAGE_EXTS | {".pdf", ".hwi"}
 MAX_UNDO_STEPS = 30
 MAX_RECENT_FILES = 10
+QUICK_COLORS = [
+    ("赤", "#E53935"),
+    ("オレンジ", "#FB8C00"),
+    ("黄", "#FDD835"),
+    ("緑", "#2E7D32"),
+    ("青", "#1E88E5"),
+    ("紫", "#8E24AA"),
+    ("黒", "#212121"),
+    ("白", "#FFFFFF"),
+]
+QUICK_TEXT_TEMPLATES = ["ここを確認", "修正お願いします", "OK", "NG", "※注意", "削除"]
 
 
 def resource_path(relative_path):
@@ -62,7 +77,7 @@ def render_pdf_page_to_pixmap(page, target_dpi=150.0, max_dim=3600):
         zoom = max_dim / max_side
     zoom = max(0.5, zoom)
 
-    pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
+    pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), alpha=False)
     samples = pix.samples  # バッファの寿命を明示的に保持
     qimg = QImage(samples, pix.width, pix.height, pix.stride, QImage.Format.Format_RGB888).copy()
     return QPixmap.fromImage(qimg)
@@ -146,6 +161,7 @@ def snap_square_point(anchor, current):
 def apply_light_theme(app):
     """OSがダークモードであってもアプリ全体を常に完全なライトモードに固定する"""
     app.setStyle("Fusion")
+    app.setFont(QFont(DEFAULT_FONT_FAMILY, 9))
 
     # Qt 6.8以降ではカラースキームも明示的にLightへ固定
     hints = app.styleHints()
@@ -214,7 +230,7 @@ def apply_light_theme(app):
     QMenuBar {{
         background-color: {bg_toolbar};
         border-bottom: 1px solid {border_toolbar};
-        font-size: 13px;
+        font-size: 10pt;
         color: {text_main};
     }}
     QMenuBar::item {{
@@ -229,7 +245,7 @@ def apply_light_theme(app):
         background-color: {bg_toolbar};
         color: {text_main};
         border: 1px solid {border_toolbar};
-        font-size: 13px;
+        font-size: 10pt;
         padding: 4px 0px;
     }}
     QMenu::item {{
@@ -261,10 +277,10 @@ def apply_light_theme(app):
     }}
     QToolButton {{
         color: {text_main};
-        font-size: 12px;
+        font-size: 9pt;
         border: 1px solid transparent;
         border-radius: 4px;
-        padding: 4px 7px;
+        padding: 3px 6px;
         min-height: 20px;
         background-color: transparent;
     }}
@@ -286,12 +302,12 @@ def apply_light_theme(app):
     QComboBox {{
         border: 1px solid {border_toolbar};
         border-radius: 4px;
-        padding: 2px 6px;
+        padding: 2px 5px;
         background-color: {combo_bg};
         color: {text_main};
-        font-size: 12px;
+        font-size: 9pt;
         min-height: 20px;
-        min-width: 58px;
+        min-width: 48px;
     }}
     QComboBox:hover, QComboBox:focus {{
         border: 1px solid {selection_bg};
@@ -309,7 +325,7 @@ def apply_light_theme(app):
         font-weight: bold;
         padding-left: 3px;
         padding-right: 2px;
-        font-size: 12px;
+        font-size: 9pt;
     }}
     QGraphicsView {{
         background-color: {bg_view};
@@ -319,7 +335,7 @@ def apply_light_theme(app):
         background-color: {bg_toolbar};
         color: {text_main};
         border-top: 1px solid {border_toolbar};
-        font-size: 12px;
+        font-size: 9pt;
     }}
     QStatusBar::item {{
         border: none;
@@ -327,7 +343,7 @@ def apply_light_theme(app):
     QStatusBar QLabel {{
         color: {text_muted};
         padding: 2px 8px;
-        font-size: 12px;
+        font-size: 9pt;
     }}
     QDialog, QMessageBox, QInputDialog {{
         background-color: {dialog_bg};
@@ -335,7 +351,7 @@ def apply_light_theme(app):
     }}
     QDialog QLabel, QMessageBox QLabel, QInputDialog QLabel {{
         color: {text_main};
-        font-size: 13px;
+        font-size: 10pt;
         font-weight: normal;
     }}
     QLineEdit, QSpinBox, QTextEdit, QTextBrowser {{
@@ -357,7 +373,7 @@ def apply_light_theme(app):
         border-radius: 4px;
         padding: 6px 18px;
         min-width: 64px;
-        font-size: 13px;
+        font-size: 10pt;
     }}
     QPushButton:hover {{
         background-color: {selection_bg};
@@ -373,7 +389,39 @@ def apply_light_theme(app):
         color: {text_main};
         border: 1px solid #C5C9CE;
         padding: 4px 7px;
-        font-size: 12px;
+        font-size: 9pt;
+    }}
+    QTabWidget::pane {{
+        border: 1px solid {border_toolbar};
+        background-color: {combo_bg};
+        border-radius: 4px;
+        top: -1px;
+    }}
+    QTabBar::tab {{
+        background-color: #EAEEF3;
+        color: #444444;
+        border: 1px solid {border_toolbar};
+        border-bottom: none;
+        border-top-left-radius: 5px;
+        border-top-right-radius: 5px;
+        padding: 7px 14px;
+        margin-right: 2px;
+        font-size: 9pt;
+    }}
+    QTabBar::tab:hover {{
+        background-color: {hover_bg};
+        color: {text_main};
+    }}
+    QTabBar::tab:selected {{
+        background-color: {combo_bg};
+        color: {selection_bg};
+        font-weight: bold;
+        border-bottom: 2px solid {combo_bg};
+    }}
+    QCheckBox {{
+        color: {text_main};
+        font-size: 9pt;
+        spacing: 6px;
     }}
     QScrollBar:vertical {{
         background: #EEF0F3;
@@ -890,9 +938,12 @@ class CustomTextItem(QGraphicsTextItem):
 
     def paint(self, painter, option, widget):
         if self._bg_brush.style() != Qt.BrushStyle.NoBrush or self._border_pen.style() != Qt.PenStyle.NoPen:
+            painter.save()
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
             painter.setBrush(self._bg_brush)
             painter.setPen(self._border_pen)
-            painter.drawRect(self.boundingRect())
+            painter.drawRoundedRect(self.boundingRect(), 4.0, 4.0)
+            painter.restore()
         super().paint(painter, option, widget)
 
     def mouseDoubleClickEvent(self, event):
@@ -1022,6 +1073,284 @@ class NumberStampItem(QGraphicsItem):
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
+
+
+class CalloutItem(QGraphicsItem):
+    """矢印しっぽ付きの吹き出し（コールアウト）注釈アイテム"""
+    def __init__(self, box_rect, tip_point, text, font, text_color, pen, brush, parent=None):
+        super().__init__(parent)
+        self._box_rect = QRectF(box_rect).normalized()
+        self._tip_point = QPointF(tip_point)
+        self._text = str(text)
+        self._font = QFont(font)
+        self._text_color = QColor(text_color)
+        self._pen = QPen(pen)
+        self._brush = QBrush(brush)
+        self._cached_outline = None
+        self._cached_shape = None
+        self.setFlags(
+            QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
+            | QGraphicsItem.GraphicsItemFlag.ItemIsMovable
+        )
+
+    def _invalidate_cache(self):
+        self._cached_outline = None
+        self._cached_shape = None
+
+    def box_rect(self):
+        return QRectF(self._box_rect)
+
+    def setBoxRect(self, rect):
+        self.prepareGeometryChange()
+        r = QRectF(rect).normalized()
+        if r.width() < 36.0:
+            r.setWidth(36.0)
+        if r.height() < 28.0:
+            r.setHeight(28.0)
+        self._box_rect = r
+        self._invalidate_cache()
+        self.update()
+
+    def tip_point(self):
+        return QPointF(self._tip_point)
+
+    def setTipPoint(self, pt):
+        self.prepareGeometryChange()
+        self._tip_point = QPointF(pt)
+        self._invalidate_cache()
+        self.update()
+
+    def text(self):
+        return self._text
+
+    def setText(self, text):
+        self._text = str(text)
+        self.update()
+
+    def font(self):
+        return QFont(self._font)
+
+    def setFont(self, font):
+        self._font = QFont(font)
+        self.update()
+
+    def defaultTextColor(self):
+        return QColor(self._text_color)
+
+    def setDefaultTextColor(self, color):
+        self._text_color = QColor(color)
+        self.update()
+
+    def pen(self):
+        return QPen(self._pen)
+
+    def setPen(self, pen):
+        self.prepareGeometryChange()
+        self._pen = QPen(pen)
+        self._invalidate_cache()
+        self.update()
+
+    def brush(self):
+        return QBrush(self._brush)
+
+    def setBrush(self, brush):
+        self._brush = QBrush(brush)
+        self.update()
+
+    def fit_box_to_text(self):
+        """文字量に合わせて吹き出し枠をちょうど良いサイズへ調整する"""
+        fm = QFontMetricsF(self._font)
+        pad_x = 18.0
+        pad_y = 12.0
+        max_w = 420.0
+        bound = fm.boundingRect(
+            QRectF(0, 0, max_w, 2000.0),
+            int(Qt.AlignmentFlag.AlignLeft | Qt.TextFlag.TextWordWrap),
+            self._text or " ",
+        )
+        new_w = max(80.0, min(max_w + pad_x * 2.0, bound.width() + pad_x * 2.0 + 10.0))
+        new_h = max(42.0, bound.height() + pad_y * 2.0 + 6.0)
+        c = self._box_rect.center()
+        self.setBoxRect(QRectF(c.x() - new_w * 0.5, c.y() - new_h * 0.5, new_w, new_h))
+
+    def _outline_path(self):
+        if self._cached_outline is None:
+            r = self._box_rect
+            rad = min(10.0, r.width() * 0.25, r.height() * 0.25)
+            box_path = QPainterPath()
+            box_path.addRoundedRect(r, rad, rad)
+            if not r.contains(self._tip_point):
+                center = r.center()
+                dx = self._tip_point.x() - center.x()
+                dy = self._tip_point.y() - center.y()
+                dist = math.hypot(dx, dy)
+                if dist > 1e-3:
+                    nx = -dy / dist
+                    ny = dx / dist
+                    hw = min(14.0, max(6.0, min(r.width(), r.height()) * 0.22))
+                    b1 = QPointF(center.x() + nx * hw, center.y() + ny * hw)
+                    b2 = QPointF(center.x() - nx * hw, center.y() - ny * hw)
+                    tail = QPainterPath()
+                    tail.moveTo(b1)
+                    tail.lineTo(self._tip_point)
+                    tail.lineTo(b2)
+                    tail.closeSubpath()
+                    box_path = box_path.united(tail).simplified()
+            self._cached_outline = box_path
+        return self._cached_outline
+
+    def boundingRect(self):
+        pad = max(4.0, self._pen.widthF() + 4.0)
+        return self._outline_path().boundingRect().adjusted(-pad, -pad, pad, pad)
+
+    def shape(self):
+        if self._cached_shape is None:
+            outline = self._outline_path()
+            stroker = QPainterPathStroker()
+            stroker.setWidth(max(self._pen.widthF() + 10.0, 18.0))
+            self._cached_shape = stroker.createStroke(outline).united(outline)
+        return self._cached_shape
+
+    def paint(self, painter, option, widget=None):
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+
+        outline = self._outline_path()
+        painter.setPen(self._pen)
+        painter.setBrush(self._brush)
+        painter.drawPath(outline)
+
+        if self._text:
+            text_rect = self._box_rect.adjusted(10.0, 6.0, -10.0, -6.0)
+            painter.setFont(self._font)
+            painter.setPen(QPen(self._text_color))
+            painter.drawText(
+                text_rect,
+                int(Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap),
+                self._text,
+            )
+
+        if self.isSelected():
+            sel_pen = QPen(QColor(0, 95, 184), 0, Qt.PenStyle.DashLine)
+            painter.setPen(sel_pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRect(self._box_rect)
+        painter.restore()
+
+    def mouseDoubleClickEvent(self, event):
+        scene = self.scene()
+        if scene and hasattr(scene, "edit_callout_item") and scene.current_tool == "select":
+            scene.edit_callout_item(self)
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
+
+class SpotlightItem(QGraphicsItem):
+    """指定範囲だけ明るく際立たせ周囲を暗くして注目箇所を一目で伝えるアイテム"""
+    def __init__(self, rect, pen, dim_alpha=115, corner_radius=8.0, parent=None):
+        super().__init__(parent)
+        self._rect = QRectF(rect).normalized()
+        self._pen = QPen(pen)
+        self._dim_alpha = max(30, min(220, int(dim_alpha)))
+        self._corner_radius = max(0.0, float(corner_radius))
+        self._cached_shape = None
+        self.setFlags(
+            QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
+            | QGraphicsItem.GraphicsItemFlag.ItemIsMovable
+            | QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges
+        )
+
+    def rect(self):
+        return QRectF(self._rect)
+
+    def setRect(self, rect):
+        self.prepareGeometryChange()
+        self._rect = QRectF(rect).normalized()
+        self._cached_shape = None
+        self.update()
+
+    def pen(self):
+        return QPen(self._pen)
+
+    def setPen(self, pen):
+        self.prepareGeometryChange()
+        self._pen = QPen(pen)
+        self._cached_shape = None
+        self.update()
+
+    def dim_alpha(self):
+        return self._dim_alpha
+
+    def setDimAlpha(self, alpha):
+        self._dim_alpha = max(30, min(220, int(alpha)))
+        self.update()
+
+    def corner_radius(self):
+        return self._corner_radius
+
+    def itemChange(self, change, value):
+        if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange:
+            self.prepareGeometryChange()
+        return super().itemChange(change, value)
+
+    def _effective_radius(self):
+        return min(self._corner_radius, self._rect.width() * 0.5, self._rect.height() * 0.5)
+
+    def boundingRect(self):
+        pad = max(6.0, self._pen.widthF() + 4.0)
+        base = self._rect
+        sc = self.scene()
+        if sc is not None and not sc.sceneRect().isEmpty():
+            cover = self.mapRectFromScene(sc.sceneRect())
+            base = base.united(cover)
+        return base.adjusted(-pad, -pad, pad, pad)
+
+    def shape(self):
+        if self._cached_shape is None:
+            path = QPainterPath()
+            rad = self._effective_radius()
+            if rad > 0.0:
+                path.addRoundedRect(self._rect, rad, rad)
+            else:
+                path.addRect(self._rect)
+            stroker = QPainterPathStroker()
+            stroker.setWidth(max(self._pen.widthF() + 14.0, 24.0))
+            self._cached_shape = stroker.createStroke(path)
+        return self._cached_shape
+
+    def paint(self, painter, option, widget=None):
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        rad = self._effective_radius()
+
+        sc = self.scene()
+        if sc is not None and not sc.sceneRect().isEmpty():
+            cover = self.mapRectFromScene(sc.sceneRect())
+            dim_path = QPainterPath()
+            dim_path.setFillRule(Qt.FillRule.OddEvenFill)
+            dim_path.addRect(cover)
+            if rad > 0.0:
+                dim_path.addRoundedRect(self._rect, rad, rad)
+            else:
+                dim_path.addRect(self._rect)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(QColor(0, 0, 0, self._dim_alpha)))
+            painter.drawPath(dim_path)
+
+        painter.setPen(self._pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        if rad > 0.0:
+            painter.drawRoundedRect(self._rect, rad, rad)
+        else:
+            painter.drawRect(self._rect)
+
+        if self.isSelected():
+            sel_pen = QPen(QColor(0, 150, 255), 0, Qt.PenStyle.DashLine)
+            painter.setPen(sel_pen)
+            painter.drawRect(self._rect)
+        painter.restore()
 
 
 class MarginHandleItem(QGraphicsRectItem):
@@ -1177,12 +1506,13 @@ class AnnotationScene(QGraphicsScene):
     stateChanged = pyqtSignal()
     mouseSceneMoved = pyqtSignal(QPointF)
     statusMessageRequested = pyqtSignal(str, int)
+    cropSelectionChanged = pyqtSignal(bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.current_tool = "select"
         self.current_line_type = "line"     # line, arrow, double_arrow, freehand, marker
-        self.current_shape_type = "rect"    # rect, rounded_rect, ellipse, triangle, mosaic, stamp
+        self.current_shape_type = "rect"    # rect, rounded_rect, ellipse, triangle, mosaic, stamp, spotlight
         self.current_pen_style = Qt.PenStyle.SolidLine
 
         # 色管理（ペン・文字・ブラシ）
@@ -1198,6 +1528,7 @@ class AnnotationScene(QGraphicsScene):
         self.current_font_bold = False
         self.current_font_italic = False
         self.next_stamp_number = 1
+        self.recent_texts = []
 
         self.show_grid = False
         self.grid_size = 50
@@ -1209,6 +1540,18 @@ class AnnotationScene(QGraphicsScene):
         self.bg_item = None
         self.pending_text_item = None
         self._last_freehand_point = None
+        self._callout_drag_tip = None
+
+        # 切り抜き（トリミング）状態
+        self.crop_rect = None
+        self._crop_drag_mode = None
+        self._crop_drag_start = None
+        self._crop_orig_rect = None
+
+        # スポイト状態
+        self._eyedropper_image = None
+        self._eyedropper_hover_pos = None
+        self._eyedropper_hover_color = None
 
         self.resizing_item = None
         self.resize_mode = None
@@ -1420,6 +1763,27 @@ class AnnotationScene(QGraphicsScene):
                 "text_color": QColor(item.text_color()),
                 "pos": QPointF(item.pos()),
             }
+        if isinstance(item, CalloutItem):
+            return {
+                "type": "callout",
+                "box_rect": QRectF(item.box_rect()),
+                "tip_point": QPointF(item.tip_point()),
+                "text": item.text(),
+                "font": QFont(item.font()),
+                "color": QColor(item.defaultTextColor()),
+                "pen": QPen(item.pen()),
+                "brush": QBrush(item.brush()),
+                "pos": QPointF(item.pos()),
+            }
+        if isinstance(item, SpotlightItem):
+            return {
+                "type": "spotlight",
+                "rect": QRectF(item.rect()),
+                "pen": QPen(item.pen()),
+                "dim_alpha": item.dim_alpha(),
+                "corner_radius": item.corner_radius(),
+                "pos": QPointF(item.pos()),
+            }
         return None
 
     def _create_item_from_dict(self, data):
@@ -1457,6 +1821,23 @@ class AnnotationScene(QGraphicsScene):
                 data["number"], data.get("radius", 20.0),
                 data.get("bg_color", QColor("#E53935")),
                 data.get("text_color", QColor("#FFFFFF"))
+            )
+        elif item_type == "callout":
+            new_item = CalloutItem(
+                QRectF(data["box_rect"]),
+                QPointF(data["tip_point"]),
+                data.get("text", ""),
+                QFont(data["font"]),
+                QColor(data["color"]),
+                QPen(data["pen"]),
+                QBrush(data["brush"]),
+            )
+        elif item_type == "spotlight":
+            new_item = SpotlightItem(
+                QRectF(data["rect"]),
+                QPen(data["pen"]),
+                data.get("dim_alpha", 115),
+                data.get("corner_radius", 8.0),
             )
         if new_item is not None and "pos" in data:
             new_item.setPos(QPointF(data["pos"]))
@@ -1539,6 +1920,7 @@ class AnnotationScene(QGraphicsScene):
         self.start_point = None
         self.current_path = None
         self._last_freehand_point = None
+        self._callout_drag_tip = None
         self.resizing_item = None
         self.resize_mode = None
         self.shape_anchor = None
@@ -1547,6 +1929,39 @@ class AnnotationScene(QGraphicsScene):
         self.start_scene_rect = None
         self._drag_initial_positions.clear()
         self.was_modified = False
+        self.clear_crop_selection()
+        self.clear_eyedropper()
+
+    def clear_crop_selection(self):
+        had = self.crop_rect is not None
+        self.crop_rect = None
+        self._crop_drag_mode = None
+        self._crop_drag_start = None
+        self._crop_orig_rect = None
+        if had:
+            self.cropSelectionChanged.emit(False)
+            self.invalidate(self.sceneRect(), QGraphicsScene.SceneLayer.ForegroundLayer)
+
+    def set_eyedropper_image(self, image):
+        self._eyedropper_image = image
+        self._eyedropper_hover_pos = None
+        self._eyedropper_hover_color = None
+
+    def clear_eyedropper(self):
+        had = self._eyedropper_image is not None or self._eyedropper_hover_pos is not None
+        self._eyedropper_image = None
+        self._eyedropper_hover_pos = None
+        self._eyedropper_hover_color = None
+        if had:
+            self.invalidate(self.sceneRect(), QGraphicsScene.SceneLayer.ForegroundLayer)
+
+    def remember_recent_text(self, text):
+        t = (text or "").strip()
+        if not t:
+            return
+        self.recent_texts = [x for x in self.recent_texts if x != t]
+        self.recent_texts.insert(0, t)
+        self.recent_texts = self.recent_texts[:6]
 
     def mark_as_saved(self):
         """現在のUndo先端状態を保存済みとして記録する"""
@@ -1697,6 +2112,23 @@ class AnnotationScene(QGraphicsScene):
         if isinstance(item, NumberStampItem):
             rad = item.radius()
             return [("stamp_radius", QPointF(rad, rad), Qt.CursorShape.SizeFDiagCursor)]
+        if isinstance(item, CalloutItem):
+            r = item.box_rect()
+            return [
+                ("callout_tip", item.tip_point(), Qt.CursorShape.CrossCursor),
+                ("callout_tl", r.topLeft(), Qt.CursorShape.SizeFDiagCursor),
+                ("callout_tr", r.topRight(), Qt.CursorShape.SizeBDiagCursor),
+                ("callout_bl", r.bottomLeft(), Qt.CursorShape.SizeBDiagCursor),
+                ("callout_br", r.bottomRight(), Qt.CursorShape.SizeFDiagCursor),
+            ]
+        if isinstance(item, SpotlightItem):
+            r = item.rect()
+            return [
+                ("shape_tl", r.topLeft(), Qt.CursorShape.SizeFDiagCursor),
+                ("shape_tr", r.topRight(), Qt.CursorShape.SizeBDiagCursor),
+                ("shape_bl", r.bottomLeft(), Qt.CursorShape.SizeBDiagCursor),
+                ("shape_br", r.bottomRight(), Qt.CursorShape.SizeFDiagCursor),
+            ]
         return []
 
     def drawForeground(self, painter, rect):
@@ -1726,6 +2158,81 @@ class AnnotationScene(QGraphicsScene):
                     y += step
                 painter.restore()
 
+        if self.current_tool == "crop" and self.bg_item and not self.sceneRect().isEmpty():
+            sr = self.sceneRect()
+            scale = self.get_view_scale()
+            painter.save()
+            if self.crop_rect is not None and not self.crop_rect.isEmpty():
+                cr = self.crop_rect.intersected(sr)
+                dim = QPainterPath()
+                dim.setFillRule(Qt.FillRule.OddEvenFill)
+                dim.addRect(sr)
+                dim.addRect(cr)
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QColor(0, 0, 0, 120))
+                painter.drawPath(dim)
+
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.setPen(QPen(Qt.GlobalColor.white, 2.0 / scale))
+                painter.drawRect(cr)
+                painter.setPen(QPen(QColor(0, 120, 255), 1.5 / scale, Qt.PenStyle.DashLine))
+                painter.drawRect(cr)
+
+                hs = 10.0 / scale
+                half = hs * 0.5
+                painter.setBrush(QColor(0, 120, 255))
+                painter.setPen(QPen(Qt.GlobalColor.white, 1.5 / scale))
+                for pt in (cr.topLeft(), cr.topRight(), cr.bottomLeft(), cr.bottomRight()):
+                    painter.drawRect(QRectF(pt.x() - half, pt.y() - half, hs, hs))
+
+                # 選択サイズバッジ
+                size_text = f"{int(round(cr.width()))} × {int(round(cr.height()))} px"
+                font = QFont(DEFAULT_FONT_FAMILY)
+                font.setPointSizeF(max(6.0, 10.0 / scale))
+                font.setBold(True)
+                painter.setFont(font)
+                fm = QFontMetricsF(font)
+                tw = fm.horizontalAdvance(size_text) + 12.0 / scale
+                th = fm.height() + 6.0 / scale
+                bx = cr.left()
+                by = cr.top() - th - 4.0 / scale
+                if by < sr.top():
+                    by = cr.top() + 4.0 / scale
+                badge = QRectF(bx, by, tw, th)
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QColor(0, 95, 184, 220))
+                painter.drawRoundedRect(badge, 3.0 / scale, 3.0 / scale)
+                painter.setPen(QPen(Qt.GlobalColor.white))
+                painter.drawText(badge, Qt.AlignmentFlag.AlignCenter, size_text)
+            painter.restore()
+            return
+
+        if self.current_tool == "eyedropper" and self._eyedropper_hover_pos is not None and self._eyedropper_hover_color is not None:
+            scale = self.get_view_scale()
+            p = self._eyedropper_hover_pos
+            c = self._eyedropper_hover_color
+            off = 16.0 / scale
+            box_w = 96.0 / scale
+            box_h = 28.0 / scale
+            box = QRectF(p.x() + off, p.y() - box_h - 6.0 / scale, box_w, box_h)
+            painter.save()
+            painter.setBrush(QColor(255, 255, 255, 240))
+            painter.setPen(QPen(QColor("#555555"), 1.0 / scale))
+            painter.drawRoundedRect(box, 4.0 / scale, 4.0 / scale)
+            sw = 18.0 / scale
+            swatch = QRectF(box.left() + 5.0 / scale, box.top() + 5.0 / scale, sw, sw)
+            painter.setBrush(c)
+            painter.drawRect(swatch)
+            font = QFont(DEFAULT_FONT_FAMILY)
+            font.setPointSizeF(max(5.0, 8.5 / scale))
+            font.setBold(True)
+            painter.setFont(font)
+            painter.setPen(QPen(QColor("#222222")))
+            text_r = QRectF(swatch.right() + 5.0 / scale, box.top(), box.right() - swatch.right() - 6.0 / scale, box.height())
+            painter.drawText(text_r, int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft), c.name().upper())
+            painter.restore()
+            return
+
         if self.current_tool != "select":
             return
 
@@ -1738,15 +2245,19 @@ class AnnotationScene(QGraphicsScene):
         half = handle_size * 0.5
 
         painter.save()
-        painter.setBrush(QColor(0, 120, 255))
         painter.setPen(QPen(Qt.GlobalColor.white, 1.5 / scale))
 
         for item in selected:
             if item == self.bg_item or item == self.pending_text_item or isinstance(item, MarginHandleItem):
                 continue
-            for _, local_pt, _ in self._get_item_handles(item):
+            for mode, local_pt, _ in self._get_item_handles(item):
                 pt = item.mapToScene(local_pt)
-                painter.drawRect(QRectF(pt.x() - half, pt.y() - half, handle_size, handle_size))
+                if mode == "callout_tip":
+                    painter.setBrush(QColor(255, 140, 0))
+                    painter.drawEllipse(QRectF(pt.x() - half * 1.15, pt.y() - half * 1.15, handle_size * 1.15, handle_size * 1.15))
+                else:
+                    painter.setBrush(QColor(0, 120, 255))
+                    painter.drawRect(QRectF(pt.x() - half, pt.y() - half, handle_size, handle_size))
         painter.restore()
 
     def _capture_mosaic_region(self, scene_rect):
@@ -1804,6 +2315,56 @@ class AnnotationScene(QGraphicsScene):
             super().mousePressEvent(event)
             return
 
+        if self.current_tool == "eyedropper":
+            color = self._sample_eyedropper_color(event.scenePos())
+            if color is not None:
+                shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+                target = "brush" if (event.button() == Qt.MouseButton.RightButton or shift) else "pen"
+                main_win = self.parent()
+                if hasattr(main_win, "apply_eyedropper_color"):
+                    main_win.apply_eyedropper_color(color, target)
+            event.accept()
+            return
+
+        if self.current_tool == "crop":
+            if event.button() == Qt.MouseButton.RightButton:
+                self.clear_crop_selection()
+                event.accept()
+                return
+            if event.button() == Qt.MouseButton.LeftButton and self.bg_item:
+                pos = event.scenePos()
+                sr = self.sceneRect()
+                clamped = QPointF(max(sr.left(), min(sr.right(), pos.x())), max(sr.top(), min(sr.bottom(), pos.y())))
+                self._crop_drag_start = clamped
+                handle_area = 16.0 / self.get_view_scale()
+
+                mode = "new"
+                if self.crop_rect is not None and not self.crop_rect.isEmpty():
+                    cr = self.crop_rect
+                    corners = [
+                        ("tl", cr.topLeft()),
+                        ("tr", cr.topRight()),
+                        ("bl", cr.bottomLeft()),
+                        ("br", cr.bottomRight()),
+                    ]
+                    for m, pt in corners:
+                        if (pos - pt).manhattanLength() < handle_area:
+                            mode = m
+                            break
+                    if mode == "new" and cr.contains(pos):
+                        mode = "move"
+
+                self._crop_drag_mode = mode
+                if mode == "new":
+                    self.crop_rect = QRectF(clamped, clamped)
+                    self._crop_orig_rect = QRectF(self.crop_rect)
+                else:
+                    self._crop_orig_rect = QRectF(self.crop_rect)
+                self.cropSelectionChanged.emit(False)
+                self.invalidate(sr, QGraphicsScene.SceneLayer.ForegroundLayer)
+                event.accept()
+            return
+
         if self.current_tool == "select":
             if event.button() == Qt.MouseButton.RightButton:
                 super().mousePressEvent(event)
@@ -1836,6 +2397,14 @@ class AnnotationScene(QGraphicsScene):
                             self.shape_anchor = item.rect().bottomLeft()
                         elif mode == "shape_bl":
                             self.shape_anchor = item.rect().topRight()
+                        elif mode == "callout_tl":
+                            self.shape_anchor = item.box_rect().bottomRight()
+                        elif mode == "callout_tr":
+                            self.shape_anchor = item.box_rect().bottomLeft()
+                        elif mode == "callout_bl":
+                            self.shape_anchor = item.box_rect().topRight()
+                        elif mode == "callout_br":
+                            self.shape_anchor = item.box_rect().topLeft()
                         elif mode == "path_br":
                             self.shape_anchor = item.boundingRect().topLeft()
                             self.initial_path = QPainterPath(item.path())
@@ -1859,6 +2428,27 @@ class AnnotationScene(QGraphicsScene):
 
         if event.button() == Qt.MouseButton.LeftButton:
             self.start_point = event.scenePos()
+
+            # 吹き出し（コールアウト）ドラッグ開始（始点＝指す先、終点＝吹き出しボックス）
+            if self.current_tool == "callout":
+                self._callout_drag_tip = QPointF(self.start_point)
+                pen = QPen(self.current_pen_color)
+                pen.setWidthF(max(2.0, min(self.pen_width, 8.0)))
+                pen.setStyle(self.current_pen_style)
+                pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+                bg_c = QColor(self.current_brush_color) if self.use_fill else QColor(Qt.GlobalColor.white)
+                font = QFont(self.current_font_family)
+                font.setPointSizeF(max(8.0, self.current_font_size))
+                font.setBold(self.current_font_bold)
+                font.setItalic(self.current_font_italic)
+                init_box = QRectF(self.start_point.x() + 20.0, self.start_point.y() - 70.0, 140.0, 50.0)
+                self.temp_item = CalloutItem(
+                    init_box, self._callout_drag_tip, "コメント",
+                    font, self.current_text_color, pen, QBrush(bg_c)
+                )
+                self.temp_item.setZValue(self.get_next_z_value())
+                self.addItem(self.temp_item)
+                return
 
             # 連番スタンプは1クリックで即配置
             if self.current_tool == "shape" and self.current_shape_type == "stamp":
@@ -1930,9 +2520,32 @@ class AnnotationScene(QGraphicsScene):
                     preview_pen = QPen(QColor("#005FB8"), max(1.5, 2.0 / self.get_view_scale()), Qt.PenStyle.DashLine)
                     self.temp_item = CustomRectItem(QRectF(self.start_point, self.start_point), preview_pen)
                     self.temp_item.setBrush(QBrush(QColor(0, 95, 184, 35)))
+                elif self.current_shape_type == "spotlight":
+                    self.temp_item = SpotlightItem(QRectF(self.start_point, self.start_point), pen)
                 if self.temp_item is not None:
                     self.temp_item.setZValue(self.get_next_z_value())
                     self.addItem(self.temp_item)
+
+    def _sample_eyedropper_color(self, scene_pos):
+        if self._eyedropper_image is None or self.bg_item is None:
+            return None
+        sr = self.sceneRect()
+        if sr.isEmpty():
+            return None
+        ix = int(round(scene_pos.x() - sr.left()))
+        iy = int(round(scene_pos.y() - sr.top()))
+        if 0 <= ix < self._eyedropper_image.width() and 0 <= iy < self._eyedropper_image.height():
+            return self._eyedropper_image.pixelColor(ix, iy)
+        return None
+
+    def mouseDoubleClickEvent(self, event):
+        if self.current_tool == "crop" and self.crop_rect is not None and self.crop_rect.width() >= 10 and self.crop_rect.height() >= 10:
+            main_win = self.parent()
+            if hasattr(main_win, "confirm_crop"):
+                main_win.confirm_crop()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
 
     def mouseMoveEvent(self, event):
         self.mouseSceneMoved.emit(event.scenePos())
@@ -1944,6 +2557,64 @@ class AnnotationScene(QGraphicsScene):
 
         if self.current_tool == "margin":
             super().mouseMoveEvent(event)
+            return
+
+        if self.current_tool == "eyedropper":
+            pos = event.scenePos()
+            color = self._sample_eyedropper_color(pos)
+            self._eyedropper_hover_pos = pos if color is not None else None
+            self._eyedropper_hover_color = color
+            if color is not None:
+                self.statusMessageRequested.emit(
+                    f"スポイト: {color.name().upper()} (R:{color.red()}, G:{color.green()}, B:{color.blue()})  "
+                    f"[左クリック: 線/枠色 / 右クリック: 背景/塗色]",
+                    0,
+                )
+            self.invalidate(self.sceneRect(), QGraphicsScene.SceneLayer.ForegroundLayer)
+            event.accept()
+            return
+
+        if self.current_tool == "crop":
+            sr = self.sceneRect()
+            if self._crop_drag_mode is not None and self._crop_drag_start is not None:
+                pos = event.scenePos()
+                clamped = QPointF(max(sr.left(), min(sr.right(), pos.x())), max(sr.top(), min(sr.bottom(), pos.y())))
+                shift_held = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+                if self._crop_drag_mode == "new":
+                    target = snap_square_point(self._crop_drag_start, clamped) if shift_held else clamped
+                    self.crop_rect = QRectF(self._crop_drag_start, target).normalized().intersected(sr)
+                elif self._crop_drag_mode == "move":
+                    delta = clamped - self._crop_drag_start
+                    r = QRectF(self._crop_orig_rect)
+                    dx = max(sr.left() - r.left(), min(sr.right() - r.right(), delta.x()))
+                    dy = max(sr.top() - r.top(), min(sr.bottom() - r.bottom(), delta.y()))
+                    r.translate(dx, dy)
+                    self.crop_rect = r
+                else:
+                    anchors = {
+                        "tl": self._crop_orig_rect.bottomRight(),
+                        "tr": self._crop_orig_rect.bottomLeft(),
+                        "bl": self._crop_orig_rect.topRight(),
+                        "br": self._crop_orig_rect.topLeft(),
+                    }
+                    anchor = anchors[self._crop_drag_mode]
+                    target = snap_square_point(anchor, clamped) if shift_held else clamped
+                    self.crop_rect = QRectF(anchor, target).normalized().intersected(sr)
+                self.invalidate(sr, QGraphicsScene.SceneLayer.ForegroundLayer)
+                event.accept()
+                return
+            elif self.crop_rect is not None and self.views():
+                pos = event.scenePos()
+                handle_area = 16.0 / self.get_view_scale()
+                cr = self.crop_rect
+                cursor = Qt.CursorShape.CrossCursor
+                if (pos - cr.topLeft()).manhattanLength() < handle_area or (pos - cr.bottomRight()).manhattanLength() < handle_area:
+                    cursor = Qt.CursorShape.SizeFDiagCursor
+                elif (pos - cr.topRight()).manhattanLength() < handle_area or (pos - cr.bottomLeft()).manhattanLength() < handle_area:
+                    cursor = Qt.CursorShape.SizeBDiagCursor
+                elif cr.contains(pos):
+                    cursor = Qt.CursorShape.SizeAllCursor
+                self.views()[0].viewport().setCursor(cursor)
             return
 
         if self.current_tool == "select":
@@ -2052,13 +2723,20 @@ class AnnotationScene(QGraphicsScene):
                 elif self.resize_mode in ("shape_br", "shape_tl", "shape_tr", "shape_bl"):
                     target_local = snap_square_point(self.shape_anchor, local_pos) if shift_held else local_pos
                     rect = QRectF(self.shape_anchor, target_local).normalized()
-                    if isinstance(item, (CustomRectItem, CustomEllipseItem)):
+                    if isinstance(item, (CustomRectItem, CustomEllipseItem, SpotlightItem)):
                         item.setRect(rect)
                     elif isinstance(item, CustomPolygonItem):
                         p1 = QPointF(rect.center().x(), rect.top())
                         p2 = QPointF(rect.left(), rect.bottom())
                         p3 = QPointF(rect.right(), rect.bottom())
                         item.setPolygon(QPolygonF([p1, p2, p3]))
+
+                elif self.resize_mode == "callout_tip":
+                    item.setTipPoint(local_pos)
+
+                elif self.resize_mode in ("callout_br", "callout_tl", "callout_tr", "callout_bl"):
+                    rect = QRectF(self.shape_anchor, local_pos).normalized()
+                    item.setBoxRect(rect)
 
                 elif self.resize_mode == "path_br":
                     rect = QRectF(self.shape_anchor, local_pos).normalized()
@@ -2134,10 +2812,17 @@ class AnnotationScene(QGraphicsScene):
                             self._last_freehand_point = end_point
                             self.temp_item.setPath(self.current_path)
 
+            elif self.current_tool == "callout" and isinstance(self.temp_item, CalloutItem):
+                box_w = 160.0
+                box_h = 56.0
+                box = QRectF(end_point.x() - box_w * 0.5, end_point.y() - box_h * 0.5, box_w, box_h)
+                self.temp_item.setBoxRect(box)
+                self.temp_item.setTipPoint(self._callout_drag_tip)
+
             elif self.current_tool == "shape":
                 target = snap_square_point(self.start_point, end_point) if shift_held else end_point
                 rect = QRectF(self.start_point, target).normalized()
-                if self.current_shape_type in ("rect", "rounded_rect", "ellipse", "mosaic"):
+                if self.current_shape_type in ("rect", "rounded_rect", "ellipse", "mosaic", "spotlight"):
                     self.temp_item.setRect(rect)
                 elif self.current_shape_type == "triangle":
                     p1 = QPointF(rect.center().x(), rect.top())
@@ -2148,6 +2833,27 @@ class AnnotationScene(QGraphicsScene):
     def mouseReleaseEvent(self, event):
         if self.current_tool == "margin":
             super().mouseReleaseEvent(event)
+            return
+
+        if self.current_tool == "eyedropper":
+            event.accept()
+            return
+
+        if self.current_tool == "crop":
+            if self._crop_drag_mode is not None:
+                self._crop_drag_mode = None
+                self._crop_drag_start = None
+                self._crop_orig_rect = None
+                valid = bool(
+                    self.crop_rect is not None
+                    and self.crop_rect.width() >= 10.0
+                    and self.crop_rect.height() >= 10.0
+                )
+                if not valid:
+                    self.crop_rect = None
+                self.cropSelectionChanged.emit(valid)
+                self.invalidate(self.sceneRect(), QGraphicsScene.SceneLayer.ForegroundLayer)
+                event.accept()
             return
 
         if self.current_tool == "select":
@@ -2189,6 +2895,37 @@ class AnnotationScene(QGraphicsScene):
             self.start_point = None
             self._last_freehand_point = None
 
+            # 吹き出し（コールアウト）の確定処理（テキスト入力ダイアログを表示）
+            if self.current_tool == "callout" and isinstance(finished_item, CalloutItem):
+                self._callout_drag_tip = None
+                dlg = QuickTextDialog(
+                    self.parent(),
+                    title="吹き出しテキスト入力",
+                    prompt="吹き出しに表示するコメントを入力してください (Ctrl+Enterで確定):",
+                    recent_texts=self.recent_texts,
+                    show_bg_option=False,
+                )
+                if dlg.exec() == QDialog.DialogCode.Accepted:
+                    txt = dlg.get_text()
+                    if txt:
+                        self.remember_recent_text(txt)
+                        finished_item.setText(txt)
+                        finished_item.fit_box_to_text()
+                        finished_item.setFlags(
+                            QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
+                            | QGraphicsItem.GraphicsItemFlag.ItemIsMovable
+                        )
+                        self.has_unsaved_changes = True
+                        self.save_state()
+                        if hasattr(self.parent(), "set_tool"):
+                            self.parent().set_tool("select")
+                        self.clearSelection()
+                        finished_item.setSelected(True)
+                        self.invalidate_handles()
+                        return
+                self.removeItem(finished_item)
+                return
+
             # モザイクツールの確定処理
             if self.current_tool == "shape" and self.current_shape_type == "mosaic":
                 mosaic_rect = finished_item.rect()
@@ -2203,6 +2940,21 @@ class AnnotationScene(QGraphicsScene):
                         self.has_unsaved_changes = True
                         self.save_state()
                 self.current_path = None
+                return
+
+            # スポットライトは他の注釈が暗くならないよう背景のすぐ上へ配置
+            if self.current_tool == "shape" and isinstance(finished_item, SpotlightItem):
+                r = finished_item.rect()
+                if r.width() < 6.0 and r.height() < 6.0:
+                    self.removeItem(finished_item)
+                    return
+                others = [it for it in self.annotation_items() if it != finished_item]
+                finished_item.setZValue(1.0)
+                for idx, other in enumerate(others, start=2):
+                    other.setZValue(float(idx))
+                self.has_unsaved_changes = True
+                self.save_state()
+                self.update()
                 return
 
             # 誤クリックによる0サイズゴミアイテムを自動除外
@@ -2262,11 +3014,21 @@ class AnnotationScene(QGraphicsScene):
             if self.pending_text_item is not None:
                 self.removeItem(self.pending_text_item)
                 self.pending_text_item = None
+            self.clear_crop_selection()
+            self.clear_eyedropper()
             self.clearSelection()
             if hasattr(self.parent(), "set_tool"):
                 self.parent().set_tool("select")
             event.accept()
             return
+
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            if self.current_tool == "crop" and self.crop_rect is not None and self.crop_rect.width() >= 10 and self.crop_rect.height() >= 10:
+                main_win = self.parent()
+                if hasattr(main_win, "confirm_crop"):
+                    main_win.confirm_crop()
+                event.accept()
+                return
 
         if key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
             self.delete_selected_items()
@@ -2341,7 +3103,8 @@ class AnnotationScene(QGraphicsScene):
 
         line_style_actions = {}
         if target_item is not None and isinstance(
-            target_item, (CustomLineItem, ArrowItem, CustomRectItem, CustomEllipseItem, CustomPolygonItem, CustomPathItem)
+            target_item,
+            (CustomLineItem, ArrowItem, CustomRectItem, CustomEllipseItem, CustomPolygonItem, CustomPathItem, CalloutItem, SpotlightItem),
         ):
             menu.addSeparator()
             style_menu = menu.addMenu("線スタイル")
@@ -2357,6 +3120,25 @@ class AnnotationScene(QGraphicsScene):
             menu.addSeparator()
             edit_text_action = menu.addAction("テキストを編集")
             edit_font_action = menu.addAction("フォント・書式を変更...")
+
+        edit_callout_action = None
+        edit_callout_font_action = None
+        fit_callout_action = None
+        if isinstance(target_item, CalloutItem):
+            menu.addSeparator()
+            edit_callout_action = menu.addAction("吹き出しの文字を編集")
+            edit_callout_font_action = menu.addAction("フォント・書式を変更...")
+            fit_callout_action = menu.addAction("枠サイズを文字に合わせる")
+
+        spotlight_dim_actions = {}
+        if isinstance(target_item, SpotlightItem):
+            menu.addSeparator()
+            dim_menu = menu.addMenu("周囲の暗さ")
+            for label, alpha in (("薄め", 70), ("標準", 115), ("濃いめ", 165)):
+                act = dim_menu.addAction(label)
+                act.setCheckable(True)
+                act.setChecked(abs(target_item.dim_alpha() - alpha) < 20)
+                spotlight_dim_actions[act] = alpha
 
         edit_stamp_action = None
         if isinstance(target_item, NumberStampItem):
@@ -2397,6 +3179,19 @@ class AnnotationScene(QGraphicsScene):
             self.edit_text_item(target_item)
         elif edit_font_action and action == edit_font_action:
             self.edit_text_font(target_item)
+        elif edit_callout_action and action == edit_callout_action:
+            self.edit_callout_item(target_item)
+        elif edit_callout_font_action and action == edit_callout_font_action:
+            self.edit_callout_font(target_item)
+        elif fit_callout_action and action == fit_callout_action:
+            target_item.fit_box_to_text()
+            self.has_unsaved_changes = True
+            self.save_state()
+            self.invalidate_handles()
+        elif action in spotlight_dim_actions:
+            target_item.setDimAlpha(spotlight_dim_actions[action])
+            self.has_unsaved_changes = True
+            self.save_state()
         elif edit_stamp_action and action == edit_stamp_action:
             self.edit_stamp_number(target_item)
         elif reset_aspect_action and action == reset_aspect_action:
@@ -2408,7 +3203,10 @@ class AnnotationScene(QGraphicsScene):
         self.current_pen_style = pen_style
         changed = False
         for item in self.selectedItems():
-            if isinstance(item, (CustomLineItem, ArrowItem, CustomRectItem, CustomEllipseItem, CustomPolygonItem, CustomPathItem)):
+            if isinstance(
+                item,
+                (CustomLineItem, ArrowItem, CustomRectItem, CustomEllipseItem, CustomPolygonItem, CustomPathItem, CalloutItem, SpotlightItem),
+            ):
                 pen = QPen(item.pen())
                 pen.setStyle(pen_style)
                 item.setPen(pen)
@@ -2504,11 +3302,54 @@ class AnnotationScene(QGraphicsScene):
     def edit_text_item(self, item):
         if isinstance(item, CustomTextItem):
             current_text = item.toPlainText()
-            new_text, ok = QInputDialog.getMultiLineText(
-                self.parent(), "テキストの編集", "文字を変更してください:", current_text
+            dlg = QuickTextDialog(
+                self.parent(),
+                title="テキストの編集",
+                prompt="文字を変更してください (Ctrl+Enterで確定):",
+                initial_text=current_text,
+                recent_texts=self.recent_texts,
+                show_bg_option=False,
             )
-            if ok and new_text and new_text != current_text:
-                item.setPlainText(new_text)
+            if dlg.exec() == QDialog.DialogCode.Accepted:
+                new_text = dlg.get_text()
+                if new_text and new_text != current_text:
+                    self.remember_recent_text(new_text)
+                    item.setPlainText(new_text)
+                    self.has_unsaved_changes = True
+                    self.save_state()
+                    self.invalidate_handles()
+
+    def edit_callout_item(self, item):
+        if isinstance(item, CalloutItem):
+            current_text = item.text()
+            dlg = QuickTextDialog(
+                self.parent(),
+                title="吹き出しの文字を編集",
+                prompt="コメントを変更してください (Ctrl+Enterで確定):",
+                initial_text=current_text,
+                recent_texts=self.recent_texts,
+                show_bg_option=False,
+            )
+            if dlg.exec() == QDialog.DialogCode.Accepted:
+                new_text = dlg.get_text()
+                if new_text and new_text != current_text:
+                    self.remember_recent_text(new_text)
+                    item.setText(new_text)
+                    item.fit_box_to_text()
+                    self.has_unsaved_changes = True
+                    self.save_state()
+                    self.invalidate_handles()
+
+    def edit_callout_font(self, item):
+        if isinstance(item, CalloutItem):
+            font, ok = QFontDialog.getFont(item.font(), self.parent(), "フォントと書式を選択")
+            if ok:
+                item.setFont(font)
+                self.current_font_family = font.family()
+                if font.pointSizeF() > 0:
+                    self.current_font_size = font.pointSizeF()
+                self.current_font_bold = font.bold()
+                self.current_font_italic = font.italic()
                 self.has_unsaved_changes = True
                 self.save_state()
                 self.invalidate_handles()
@@ -2710,6 +3551,26 @@ def serialize_project(scene):
             s_item["radius"] = item["radius"]
             s_item["bg_color"] = color_to_hex(item["bg_color"])
             s_item["text_color"] = color_to_hex(item["text_color"])
+        elif item_type == "callout":
+            br = item["box_rect"]
+            tp = item["tip_point"]
+            s_item["box_rect"] = [br.x(), br.y(), br.width(), br.height()]
+            s_item["tip_point"] = [tp.x(), tp.y()]
+            s_item["text"] = item["text"]
+            font = item["font"]
+            size = font.pointSizeF() if font.pointSizeF() > 0 else 20.0
+            s_item["font"] = {
+                "family": font.family(),
+                "size": size,
+                "bold": font.bold(),
+                "italic": font.italic(),
+            }
+            s_item["color"] = color_to_hex(item["color"])
+        elif item_type == "spotlight":
+            rect = item["rect"]
+            s_item["rect"] = [rect.x(), rect.y(), rect.width(), rect.height()]
+            s_item["dim_alpha"] = item.get("dim_alpha", 115)
+            s_item["corner_radius"] = item.get("corner_radius", 8.0)
 
         serialized_items.append(s_item)
 
@@ -2810,6 +3671,31 @@ def deserialize_project(project_data, scene):
                 float(item_data.get("radius", 20.0)),
                 hex_to_color(item_data.get("bg_color", "#ffe53935")),
                 hex_to_color(item_data.get("text_color", "#ffffffff")),
+            )
+        elif item_type == "callout":
+            br = item_data["box_rect"]
+            tp = item_data["tip_point"]
+            f_data = item_data.get("font", {})
+            font = QFont(f_data.get("family", DEFAULT_FONT_FAMILY))
+            font.setPointSizeF(max(1.0, float(f_data.get("size", 20.0))))
+            font.setBold(bool(f_data.get("bold", False)))
+            font.setItalic(bool(f_data.get("italic", False)))
+            new_item = CalloutItem(
+                QRectF(br[0], br[1], br[2], br[3]),
+                QPointF(tp[0], tp[1]),
+                item_data.get("text", ""),
+                font,
+                hex_to_color(item_data.get("color", "#ffff0000")),
+                pen,
+                brush if brush is not None else QBrush(Qt.GlobalColor.white),
+            )
+        elif item_type == "spotlight":
+            c = item_data["rect"]
+            new_item = SpotlightItem(
+                QRectF(c[0], c[1], c[2], c[3]),
+                pen,
+                int(item_data.get("dim_alpha", 115)),
+                float(item_data.get("corner_radius", 8.0)),
             )
 
         if new_item is not None:
@@ -2914,6 +3800,319 @@ class NewCanvasDialog(QDialog):
         return self.width_spin.value(), self.height_spin.value(), self.bg_color
 
 
+class _SubmitTextEdit(QTextEdit):
+    """Ctrl+Enterで即座に確定できるマルチライン入力欄"""
+    submitRequested = pyqtSignal()
+
+    def keyPressEvent(self, event):
+        if (
+            event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
+            and (event.modifiers() & Qt.KeyboardModifier.ControlModifier)
+        ):
+            self.submitRequested.emit()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+
+class QuickTextDialog(QDialog):
+    """定型文ボタン・履歴・Ctrl+Enter即確定を備えた高速テキスト入力ダイアログ"""
+    def __init__(
+        self,
+        parent=None,
+        title="テキスト入力",
+        prompt="文字を入力してください (Ctrl+Enterで確定):",
+        initial_text="",
+        recent_texts=None,
+        show_bg_option=False,
+        initial_bg_checked=False,
+    ):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setModal(True)
+        self.resize(440, 260)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel(prompt, self))
+
+        # 定型文クイックチップ
+        tpl_row = QHBoxLayout()
+        tpl_row.setSpacing(4)
+        for tpl in QUICK_TEXT_TEMPLATES:
+            btn = QPushButton(tpl, self)
+            btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            btn.setStyleSheet(
+                "QPushButton { padding: 3px 8px; min-width: 0px; font-size: 9pt; "
+                "background-color: #EEF3F8; border: 1px solid #C5D2E0; border-radius: 3px; }"
+                "QPushButton:hover { background-color: #005FB8; color: #FFFFFF; border-color: #005FB8; }"
+            )
+            btn.clicked.connect(lambda checked=False, t=tpl: self._insert_template(t))
+            tpl_row.addWidget(btn)
+        tpl_row.addStretch()
+        layout.addLayout(tpl_row)
+
+        if recent_texts:
+            hist_row = QHBoxLayout()
+            hist_row.addWidget(QLabel("履歴:", self))
+            self.hist_combo = QComboBox(self)
+            self.hist_combo.addItem("（最近使った文章から選ぶ）")
+            for rt in recent_texts:
+                one_line = rt.replace("\n", " / ")
+                self.hist_combo.addItem(one_line[:36], rt)
+            self.hist_combo.currentIndexChanged.connect(self._apply_history)
+            hist_row.addWidget(self.hist_combo, 1)
+            layout.addLayout(hist_row)
+
+        self.text_edit = _SubmitTextEdit(self)
+        self.text_edit.setPlainText(initial_text)
+        self.text_edit.setFont(QFont(DEFAULT_FONT_FAMILY, 10))
+        self.text_edit.submitRequested.connect(self.accept)
+        layout.addWidget(self.text_edit, 1)
+
+        self.bg_checkbox = None
+        if show_bg_option:
+            self.bg_checkbox = QCheckBox("見やすい背景・枠を付ける（塗りつぶしON）", self)
+            self.bg_checkbox.setChecked(bool(initial_bg_checked))
+            layout.addWidget(self.bg_checkbox)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, self
+        )
+        ok_btn = buttons.button(QDialogButtonBox.StandardButton.Ok)
+        if ok_btn is not None:
+            ok_btn.setText("確定 (Ctrl+Enter)")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+        self.text_edit.setFocus()
+        if initial_text:
+            self.text_edit.selectAll()
+
+    def _insert_template(self, text):
+        cur = self.text_edit.toPlainText()
+        if not cur.strip():
+            self.text_edit.setPlainText(text)
+        else:
+            self.text_edit.insertPlainText(text)
+        self.text_edit.setFocus()
+
+    def _apply_history(self, index):
+        if index > 0:
+            val = self.hist_combo.itemData(index)
+            if val:
+                self.text_edit.setPlainText(val)
+                self.text_edit.setFocus()
+
+    def get_text(self):
+        return self.text_edit.toPlainText()
+
+    def want_background(self):
+        return bool(self.bg_checkbox.isChecked()) if self.bg_checkbox is not None else False
+
+
+class ColorSwatchButton(QToolButton):
+    """ワンクリックで定番色を切り替えられるクイックカラーボタン"""
+    leftPicked = pyqtSignal(QColor, bool)   # (color, shift_held)
+    rightPicked = pyqtSignal(QColor)
+
+    def __init__(self, name, hex_color, parent=None):
+        super().__init__(parent)
+        self._color = QColor(hex_color)
+        self.setFixedSize(20, 20)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip(
+            f"{name} ({hex_color})\n"
+            "左クリック: 線/枠色（文字選択中は文字色）\n"
+            "Shift+左クリック: 文字色 / 右クリック: 背景/塗色"
+        )
+        border = "#888888" if hex_color.upper() == "#FFFFFF" else "#555555"
+        self.setStyleSheet(
+            f"QToolButton {{ background-color: {hex_color}; border: 1px solid {border}; "
+            f"border-radius: 3px; padding: 0px; min-height: 0px; }}"
+            f"QToolButton:hover {{ border: 2px solid #005FB8; }}"
+        )
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.RightButton:
+            self.rightPicked.emit(QColor(self._color))
+            event.accept()
+            return
+        if event.button() == Qt.MouseButton.LeftButton:
+            shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+            self.leftPicked.emit(QColor(self._color), shift)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+
+class CropActionBar(QFrame):
+    """切り抜き範囲確定・キャンセル用のフローティングバー"""
+    confirmClicked = pyqtSignal()
+    cancelClicked = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setStyleSheet(
+            "QFrame { background-color: #FFFFFF; border: 1px solid #005FB8; border-radius: 6px; }"
+        )
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 5, 8, 5)
+        layout.setSpacing(6)
+
+        ok_btn = QPushButton("✓ 切り抜き実行 (Enter)", self)
+        ok_btn.setStyleSheet(
+            "QPushButton { background-color: #005FB8; color: #FFFFFF; border: none; "
+            "border-radius: 4px; padding: 4px 12px; font-weight: bold; font-size: 9pt; min-width: 0px; }"
+            "QPushButton:hover { background-color: #004B94; }"
+        )
+        ok_btn.clicked.connect(self.confirmClicked.emit)
+
+        cancel_btn = QPushButton("✕ キャンセル (Esc)", self)
+        cancel_btn.setStyleSheet(
+            "QPushButton { background-color: #F0F2F5; color: #333333; border: 1px solid #C8CDD4; "
+            "border-radius: 4px; padding: 4px 10px; font-size: 9pt; min-width: 0px; }"
+            "QPushButton:hover { background-color: #E2E6EC; }"
+        )
+        cancel_btn.clicked.connect(self.cancelClicked.emit)
+
+        layout.addWidget(ok_btn)
+        layout.addWidget(cancel_btn)
+        self.adjustSize()
+        self.hide()
+
+    def reposition(self):
+        parent = self.parentWidget()
+        if parent is not None:
+            self.adjustSize()
+            x = max(12, (parent.width() - self.width()) // 2)
+            y = max(12, parent.height() - self.height() - 16)
+            self.move(x, y)
+
+
+class ScreenCaptureOverlay(QWidget):
+    """Windows画面上の任意範囲をドラッグで高解像度キャプチャする全画面オーバーレイ"""
+    captured = pyqtSignal(object)  # QPixmap or None
+
+    def __init__(self, full_pixmap, screen_geometry):
+        super().__init__(None)
+        self.full_pixmap = full_pixmap
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Tool
+        )
+        self.setGeometry(screen_geometry)
+        self.setCursor(Qt.CursorShape.CrossCursor)
+        self.setMouseTracking(True)
+
+        self._start_pos = None
+        self._current_rect = QRect()
+        self._done = False
+
+    def _finish(self, result_pixmap):
+        if self._done:
+            return
+        self._done = True
+        self.hide()
+        self.captured.emit(result_pixmap)
+        self.deleteLater()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.drawPixmap(self.rect(), self.full_pixmap)
+
+        if not self._current_rect.isNull() and self._current_rect.width() > 1 and self._current_rect.height() > 1:
+            dim = QPainterPath()
+            dim.setFillRule(Qt.FillRule.OddEvenFill)
+            dim.addRect(QRectF(self.rect()))
+            dim.addRect(QRectF(self._current_rect))
+            painter.fillPath(dim, QColor(0, 0, 0, 110))
+
+            painter.setPen(QPen(QColor("#0078D7"), 2))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRect(self._current_rect)
+
+            rx = self.full_pixmap.width() / max(1.0, float(self.width()))
+            ry = self.full_pixmap.height() / max(1.0, float(self.height()))
+            pw = int(round(self._current_rect.width() * rx))
+            ph = int(round(self._current_rect.height() * ry))
+            label = f"{pw} × {ph} px"
+            font = QFont(DEFAULT_FONT_FAMILY, 9)
+            font.setBold(True)
+            painter.setFont(font)
+            fm = QFontMetricsF(font)
+            bw = int(fm.horizontalAdvance(label)) + 16
+            bh = int(fm.height()) + 8
+            bx = self._current_rect.left()
+            by = self._current_rect.top() - bh - 6
+            if by < 8:
+                by = self._current_rect.top() + 6
+            badge = QRect(bx, by, bw, bh)
+            painter.fillRect(badge, QColor(0, 95, 184, 230))
+            painter.setPen(Qt.GlobalColor.white)
+            painter.drawText(badge, Qt.AlignmentFlag.AlignCenter, label)
+        else:
+            painter.fillRect(self.rect(), QColor(0, 0, 0, 95))
+            banner_text = "ドラッグして撮影範囲を選択してください（Enter: 全画面撮影 / Esc・右クリック: キャンセル）"
+            font = QFont(DEFAULT_FONT_FAMILY, 10)
+            font.setBold(True)
+            painter.setFont(font)
+            fm = QFontMetricsF(font)
+            bw = int(fm.horizontalAdvance(banner_text)) + 32
+            bh = int(fm.height()) + 16
+            bx = (self.width() - bw) // 2
+            badge = QRect(bx, 24, bw, bh)
+            painter.setBrush(QColor(255, 255, 255, 240))
+            painter.setPen(QPen(QColor("#005FB8"), 1))
+            painter.drawRoundedRect(badge, 6, 6)
+            painter.setPen(QColor("#222222"))
+            painter.drawText(badge, Qt.AlignmentFlag.AlignCenter, banner_text)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.RightButton:
+            self._finish(None)
+            return
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._start_pos = event.position().toPoint()
+            self._current_rect = QRect(self._start_pos, self._start_pos)
+            self.update()
+
+    def mouseMoveEvent(self, event):
+        if self._start_pos is not None:
+            cur = event.position().toPoint()
+            self._current_rect = QRect(self._start_pos, cur).normalized().intersected(self.rect())
+            self.update()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self._start_pos is not None:
+            rect = self._current_rect
+            self._start_pos = None
+            if rect.width() >= 6 and rect.height() >= 6:
+                rx = self.full_pixmap.width() / max(1.0, float(self.width()))
+                ry = self.full_pixmap.height() / max(1.0, float(self.height()))
+                src = QRect(
+                    int(round(rect.x() * rx)),
+                    int(round(rect.y() * ry)),
+                    max(1, int(round(rect.width() * rx))),
+                    max(1, int(round(rect.height() * ry))),
+                )
+                cropped = self.full_pixmap.copy(src)
+                cropped.setDevicePixelRatio(1.0)
+                self._finish(cropped)
+            else:
+                self._current_rect = QRect()
+                self.update()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape:
+            self._finish(None)
+        elif event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            full_copy = self.full_pixmap.copy()
+            full_copy.setDevicePixelRatio(1.0)
+            self._finish(full_copy)
+
+
 class ToastBanner(QLabel):
     """作業を中断させずに保存完了や通知をスマートに表示する非モーダル通知"""
     def __init__(self, parent=None):
@@ -2925,7 +4124,7 @@ class ToastBanner(QLabel):
             "  color: #FFFFFF;"
             "  border-radius: 6px;"
             "  padding: 8px 18px;"
-            "  font-size: 13px;"
+            "  font-size: 10pt;"
             "  font-weight: bold;"
             "}"
         )
@@ -2955,13 +4154,557 @@ class ToastBanner(QLabel):
         self._timer.stop()
 
 
+class AboutDialog(QDialog):
+    """アプリアイコン・バージョン・v2.0.0ハイライトを見やすく表示するバージョン情報ダイアログ"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"{APP_NAME} について")
+        self.setModal(True)
+        self.setFixedSize(480, 410)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 16)
+        layout.setSpacing(12)
+
+        # ヘッダー（アイコン + アプリ名 + バージョンバッジ）
+        header = QFrame(self)
+        header.setStyleSheet(
+            "QFrame { background-color: #EAF3FC; border: 1px solid #C5DCF5; border-radius: 8px; }"
+        )
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(16, 14, 16, 14)
+        header_layout.setSpacing(14)
+
+        icon_label = QLabel(header)
+        icon_label.setStyleSheet("border: none; background: transparent;")
+        icon_path = resource_path("icon.ico")
+        if os.path.exists(icon_path):
+            pix = QIcon(icon_path).pixmap(52, 52)
+            icon_label.setPixmap(pix)
+        else:
+            icon_label.setText("✏️")
+            icon_label.setFont(QFont(DEFAULT_FONT_FAMILY, 24))
+        header_layout.addWidget(icon_label)
+
+        title_col = QVBoxLayout()
+        title_col.setSpacing(4)
+
+        name_row = QHBoxLayout()
+        name_row.setSpacing(8)
+        name_lbl = QLabel(APP_NAME, header)
+        name_lbl.setStyleSheet("border: none; background: transparent; color: #163B65; font-size: 14pt; font-weight: bold;")
+        ver_lbl = QLabel(f" {APP_VERSION} ", header)
+        ver_lbl.setStyleSheet(
+            "background-color: #005FB8; color: #FFFFFF; border: none; "
+            "border-radius: 9px; padding: 2px 9px; font-size: 9pt; font-weight: bold;"
+        )
+        name_row.addWidget(name_lbl)
+        name_row.addWidget(ver_lbl)
+        name_row.addStretch()
+        title_col.addLayout(name_row)
+
+        sub_lbl = QLabel("素早く書いて、相手に早く伝える画像・PDF注釈ツール", header)
+        sub_lbl.setStyleSheet("border: none; background: transparent; color: #3A5575; font-size: 9pt;")
+        title_col.addWidget(sub_lbl)
+        header_layout.addLayout(title_col, 1)
+        layout.addWidget(header)
+
+        # v2.0.0 ハイライトカード
+        info_browser = QTextBrowser(self)
+        info_browser.setStyleSheet(
+            "QTextBrowser { background-color: #FFFFFF; border: 1px solid #D5DBE2; border-radius: 6px; padding: 6px; }"
+        )
+        info_browser.setHtml(
+            f"""
+            <div style="font-family: '{DEFAULT_FONT_FAMILY}', sans-serif; font-size: 9pt; color: #222222; line-height: 1.55;">
+              <div style="font-weight: bold; color: #005FB8; font-size: 10pt; margin-bottom: 6px;">
+                ✨ {APP_VERSION} の主なハイライト
+              </div>
+              <table width="100%" cellpadding="3" cellspacing="0">
+                <tr><td width="24" valign="top">📸</td><td><b>画面撮影 ＆ ワンクリック画像コピー</b>：撮って書いて即チャットへ貼付</td></tr>
+                <tr><td valign="top">💬</td><td><b>吹き出し（コールアウト）</b>：矢印しっぽ付きコメントをドラッグ1発作成</td></tr>
+                <tr><td valign="top">🔦</td><td><b>注目スポットライト ＆ モザイク目隠し</b>：強調と個人情報保護を素早く</td></tr>
+                <tr><td valign="top">🎨</td><td><b>8色クイックパレット ＆ スポイト</b>：1クリック色変更・修正液テクニック</td></tr>
+                <tr><td valign="top">✂️</td><td><b>切り抜き・ドラッグ余白調整・複数ページPDF完全対応</b></td></tr>
+                <tr><td valign="top">⌨️</td><td><b>1キー切替 ＆ 定型文 / Ctrl+Enter 高速入力</b></td></tr>
+              </table>
+              <hr style="border: none; border-top: 1px solid #E5E9EF; margin: 8px 0;">
+              <div style="color: #666666; font-size: 8pt;">
+                動作環境: Windows 10 / Windows 11 &nbsp;|&nbsp; プロジェクト形式: .hwi ({PROJECT_FORMAT_VERSION})
+              </div>
+            </div>
+            """
+        )
+        layout.addWidget(info_browser, 1)
+
+        # フッターボタン
+        btn_row = QHBoxLayout()
+        help_btn = QPushButton("📖 ヘルプセンターを開く", self)
+        help_btn.clicked.connect(self._open_help_from_about)
+        close_btn = QPushButton("閉じる", self)
+        close_btn.setDefault(True)
+        close_btn.clicked.connect(self.accept)
+        btn_row.addWidget(help_btn)
+        btn_row.addStretch()
+        btn_row.addWidget(close_btn)
+        layout.addLayout(btn_row)
+
+    def _open_help_from_about(self):
+        parent = self.parent()
+        self.accept()
+        if parent is not None and hasattr(parent, "show_help_center"):
+            parent.show_help_center(0)
+
+
+class HelpCenterDialog(QDialog):
+    """検索対応・タブ切替式のわかりやすい統合ヘルプセンター"""
+
+    TOOL_GUIDE_DATA = [
+        (
+            "取り込み・共有（最短フロー）",
+            "#EAF3FC",
+            "#005FB8",
+            [
+                ("📸 画面撮影", "Ctrl+Shift+A", "画面上の好きな範囲をドラッグして撮影し、そのまま編集を始められます（Enterで全画面撮影）。"),
+                ("📋 画像コピー", "Ctrl+Shift+C", "完成した注釈画像をクリップボードにコピーします。Teams・Slack・メール・Wordへすぐ貼り付けできます。"),
+                ("📂 開く / D&D", "Ctrl+O", "PNG・JPG・BMP・GIF・WebP・PDF・プロジェクト(.hwi)を開けます。ウィンドウへのドラッグ＆ドロップにも対応しています。"),
+                ("🖼️ 画像挿入", "Ctrl+ドロップ", "別の画像やPDFの指定ページを注釈として重ねて配置できます。右クリックから縦横比リセットも可能です。"),
+                ("📄 新規キャンバス", "Ctrl+N", "白紙キャンバスを好きなサイズ・背景色で作成します。未開閉のまま描画ツールを選ぶと自動で白紙を作成します。"),
+            ],
+        ),
+        (
+            "線・マーカー・図形・目隠し・強調",
+            "#EEF8F0",
+            "#2E7D32",
+            [
+                ("📏 直線 / 矢印 / 両矢印", "L / A", "ドラッグで描画します。Shiftキーを押しながら描くと水平・垂直・45°にきれいに揃います。右クリックで実線・破線・点線に変更できます。"),
+                ("🖊️ 曲線 / マーカー", "P / H", "自由な手描き線や半透明の蛍光ペン（マーカー）を引けます。Shiftキーを押しながら引くと真っ直ぐな蛍光マーカーになります。"),
+                ("🔲 四角 / 角丸 / 丸 / 三角", "R / O", "枠のみ・塗りつぶし・半透明塗りの3モードから選べます。Shiftキーを押しながら描くと正方形・正円になります。"),
+                ("🔦 スポットライト", "S", "ドラッグした範囲だけ明るく残し、周囲を暗くして見てほしい場所を一瞬で伝えます。右クリックで周囲の暗さを3段階調整できます。"),
+                ("🏁 モザイク（目隠し）", "M", "個人情報や機密部分を四角くドラッグするだけでモザイク処理をかけます。後から移動・削除も自由です。"),
+                ("🔢 連番スタンプ", "N", "クリックするだけで 1, 2, 3... の丸数字バッジを順番に配置できます。ダブルクリックで番号変更、編集メニューから開始番号リセットが可能です。"),
+            ],
+        ),
+        (
+            "文字・吹き出し・色・キャンバス調整",
+            "#FFF8EC",
+            "#C66A00",
+            [
+                ("💬 吹き出し", "B", "指したい場所からコメントを置きたい場所へドラッグ→文字入力で、矢印しっぽ付き吹き出しを1発作成。オレンジ丸ハンドルで先端だけ動かせます。"),
+                ("🔤 文字入力", "T", "定型文ボタン・入力履歴・Ctrl+Enter即確定に対応。「見やすい背景・枠を付ける」にチェックすれば背景写真の上でもくっきり読めます。"),
+                ("🎨 8色クイックカラー", "左/右クリック", "ツールバー上段の8色から1クリックで色変更。左クリックで線/枠色（文字選択中は文字色）、Shift+左で文字色、右クリックで背景/塗色が変わります。"),
+                ("💉 スポイト", "I", "画像上の任意の色を吸い取ります。左クリックで線/枠色、右クリック（またはShift+左クリック）で背景/塗色へセットします。"),
+                ("✂️ 切り抜き", "C", "必要な部分だけをドラッグ選択し、Enterキー・ダブルクリック・下部ボタンでトリミングします。既存注釈も自動で位置補正されます。"),
+                ("⏹️ 余白調整", "ドラッグ", "周囲の青いバーを外へドラッグすると余白が広がり、広げた余白は内へドラッグして削れます（元画像自体は保護されます）。"),
+            ],
+        ),
+        (
+            "PDF編集・保存・プロジェクト管理",
+            "#F5EFFA",
+            "#6A1B9A",
+            [
+                ("📑 複数ページPDF", "前/次ページ", "ページを切り替えても各ページの注釈が保持されます。ページ番号表示をクリックすると指定ページへ直接ジャンプできます。"),
+                ("💾 保存 / 名前を付けて保存", "Ctrl+S / Shift+S", "JPG・PNG・PDFで保存できます。複数ページPDFは編集していないページも元の高画質のまま維持して1つのPDFに保存します。"),
+                ("📦 プロジェクト保存 (.hwi)", "Ctrl+P", "すべての注釈を動かせる状態のまま保存します。後日開いて文字修正や位置調整ができます。"),
+            ],
+        ),
+    ]
+
+    SHORTCUT_DATA = [
+        (
+            "ファイル・画面撮影・すぐ共有",
+            [
+                ("Ctrl + Shift + A", "画面を範囲選択して撮影し、すぐ編集を開始"),
+                ("Ctrl + Shift + C", "完成画像をクリップボードにコピー（チャットや資料へ即貼付）"),
+                ("Ctrl + Shift + V", "クリップボードの画像を新規キャンバスとして開く"),
+                ("Ctrl + N", "新規白紙キャンバスを作成"),
+                ("Ctrl + O", "画像・PDF・プロジェクト(.hwi)を開く"),
+                ("Ctrl + S", "上書き保存"),
+                ("Ctrl + Shift + S", "名前を付けて保存（JPG / PNG / PDF）"),
+                ("Ctrl + P", "再編集用プロジェクト(.hwi)として保存"),
+            ],
+        ),
+        (
+            "1キーで瞬時にツール切替（文字入力欄以外）",
+            [
+                ("V / Esc", "選択・移動ツールへ戻る（配置待ち・切り抜きキャンセルも可）"),
+                ("L / A", "直線 / 矢印ツール"),
+                ("P / H", "曲線（フリーハンド） / マーカー（蛍光ペン）"),
+                ("R / O", "四角 / 丸・楕円"),
+                ("T / B", "文字入力 / 吹き出し（コールアウト）"),
+                ("N / M / S", "連番スタンプ / モザイク（目隠し） / スポットライト（注目枠）"),
+                ("C / I", "切り抜き（トリミング） / スポイト（色取得）"),
+                ("[ / ]", "線の太さを1段階 細く / 太くする"),
+            ],
+        ),
+        (
+            "編集・配置・微調整",
+            [
+                ("Ctrl + Z / Ctrl + Y", "元に戻す / やり直す（Ctrl + Shift + Z も対応）"),
+                ("Ctrl + C / Ctrl + V", "選択注釈のコピー / 貼り付け（外部スクショ画像もそのまま貼付）"),
+                ("Ctrl + D", "選択中の注釈を複製"),
+                ("Ctrl + A / Delete", "すべての注釈を選択 / 選択中の注釈を削除（Backspaceも可）"),
+                ("矢印キー / Shift + 矢印", "選択中の注釈を 1px / 10px ずつ微調整移動"),
+                ("Ctrl + B / Ctrl + I", "テキスト・吹き出しの 太字 / 斜体 を切り替え"),
+                ("Ctrl + Enter", "テキスト・吹き出し入力ダイアログをすぐ確定"),
+                ("Enter", "切り抜き範囲を確定（切り抜きツール中）"),
+            ],
+        ),
+        (
+            "表示・ズーム・マウス便利操作",
+            [
+                ("Ctrl + ホイール", "マウスカーソル位置を中心に拡大・縮小"),
+                ("Shift + ホイール", "横スクロール"),
+                ("Space + ドラッグ / 中ボタン", "キャンバスを手のひらスクロール（パン移動）"),
+                ("Ctrl + + / Ctrl + -", "拡大 / 縮小"),
+                ("Ctrl + 0 / Ctrl + 9", "100%表示 / 画面サイズに合わせる"),
+                ("Ctrl + G", "位置合わせ用の補助グリッド表示を切り替え"),
+                ("Shift + ドラッグ描画", "線・矢印を水平/垂直/45°固定、図形を正方形/正円に固定"),
+                ("ダブルクリック", "文字・吹き出し・連番スタンプの内容をその場で編集"),
+                ("Ctrl + ファイルドロップ", "ドロップした画像を注釈として既存キャンバス内へ挿入"),
+                ("F1", "このヘルプセンターを開く"),
+            ],
+        ),
+    ]
+
+    TIPS_AND_FAQ_DATA = [
+        (
+            "⚡ レシピ1：5秒で画面を撮ってチャットに送る",
+            "1. ツールバーの「📸 画面撮影」（Ctrl+Shift+A）を押して欲しい範囲をドラッグします。\n"
+            "2. 「B」キーで吹き出し、または「A」キーで矢印をサッと描きます。\n"
+            "3. 「📋 画像コピー」（Ctrl+Shift+C）を1クリックして、Teams・Slack・メール上で Ctrl+V するだけで完了です！保存ファイルでデスクトップが散らかりません。",
+        ),
+        (
+            "🪄 レシピ2：修正液テクニック（画像上の不要文字を自然に消す）",
+            "1. 「I」キーでスポイトを選び、消したい文字の周りの背景色を「右クリック」で吸い取ります（背景/塗色が自動設定されます）。\n"
+            "2. 「R」キーで四角ツールを選び、線/枠色も背景色に合わせるか細くして、消したい部分を四角く囲めば綺麗に隠せます。",
+        ),
+        (
+            "🔦 レシピ3：複雑な画面で「ここを見て！」を一瞬で伝える",
+            "1. 「S」キー（スポットライト）で注目箇所をドラッグすると周囲が暗くなり視線が一点に集中します。\n"
+            "2. 「N」キー（連番スタンプ）で操作順に 1, 2, 3 と番号を打ち、「B」キー（吹き出し）で一言添えると、誰でも迷わない手順書が一瞬で完成します。",
+        ),
+        (
+            "📑 レシピ4：複数ページPDFを劣化させずまとめて注釈保存",
+            "PDFを開いてページをめくりながら注釈を入れていくと、全ページの編集内容が自動で記憶されます。"
+            "最後に「💾 保存」または「名前を付けて保存（PDF）」を実行すると、編集していないページは元の鮮明な文字データのまま保持して1つのPDFに書き出します。",
+        ),
+        (
+            "❓ Q. 後から文字を直したり矢印を動かしたりしたい",
+            "JPGやPNGで保存すると画像として焼き込まれます。後から修正する可能性がある資料は「📦 プロジェクト保存」（Ctrl+P）で .hwi 形式でも保存しておくと、いつでも注釈を編集できる状態で再開できます。",
+        ),
+        (
+            "❓ Q. 余白調整で元画像の内側まで切れないのはなぜ？",
+            "「⏹️ 余白調整」はうっかり元画像を削りすぎないよう元画像を保護する設計です。画像自体を切り詰めたい場合は、隣の「✂️ 切り抜き」（Cキー）をお使いください。",
+        ),
+        (
+            "❓ Q. 塗りつぶし図形の内側をクリックしても動かせますか？",
+            "はい。塗りつぶし・半透明塗りの図形は内側どこをクリックしても掴んで移動できます。透過（枠のみ）の図形は、枠の中にある別の文字を選びやすいよう枠線部分のみ掴める設計になっています。",
+        ),
+    ]
+
+    def __init__(self, parent=None, initial_tab=0):
+        super().__init__(parent)
+        self.setWindowTitle(f"{APP_NAME} ヘルプセンター ({APP_VERSION})")
+        self.resize(800, 600)
+        self.setMinimumSize(640, 480)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 14, 14, 12)
+        layout.setSpacing(10)
+
+        # 上部ヘッダーバナー＋リアルタイム検索欄
+        header = QFrame(self)
+        header.setStyleSheet(
+            "QFrame { background-color: #EAF3FC; border: 1px solid #C5DCF5; border-radius: 7px; }"
+        )
+        h_layout = QHBoxLayout(header)
+        h_layout.setContentsMargins(14, 10, 14, 10)
+        h_layout.setSpacing(12)
+
+        icon_lbl = QLabel(header)
+        icon_lbl.setStyleSheet("border: none; background: transparent;")
+        icon_path = resource_path("icon.ico")
+        if os.path.exists(icon_path):
+            icon_lbl.setPixmap(QIcon(icon_path).pixmap(34, 34))
+        else:
+            icon_lbl.setText("📖")
+            icon_lbl.setFont(QFont(DEFAULT_FONT_FAMILY, 18))
+        h_layout.addWidget(icon_lbl)
+
+        title_box = QVBoxLayout()
+        title_box.setSpacing(1)
+        t_lbl = QLabel(f"{APP_NAME} ヘルプセンター  ({APP_VERSION})", header)
+        t_lbl.setStyleSheet("border: none; background: transparent; color: #163B65; font-size: 12pt; font-weight: bold;")
+        s_lbl = QLabel("素早く書いて、相手に早く伝えるための操作ガイド", header)
+        s_lbl.setStyleSheet("border: none; background: transparent; color: #3A5575; font-size: 9pt;")
+        title_box.addWidget(t_lbl)
+        title_box.addWidget(s_lbl)
+        h_layout.addLayout(title_box, 1)
+
+        self.search_input = QLineEdit(header)
+        self.search_input.setPlaceholderText("🔍 キーワード検索（例: 吹き出し, PDF, 色, 切り抜き）")
+        self.search_input.setClearButtonEnabled(True)
+        self.search_input.setFixedWidth(285)
+        self.search_input.textChanged.connect(self._on_search_changed)
+        h_layout.addWidget(self.search_input)
+
+        layout.addWidget(header)
+
+        # 5つのタブ構成
+        self.tabs = QTabWidget(self)
+        self.quick_browser = self._make_browser()
+        self.guide_browser = self._make_browser()
+        self.shortcut_browser = self._make_browser()
+        self.tips_browser = self._make_browser()
+        self.readme_browser = self._make_browser()
+
+        self.tabs.addTab(self.quick_browser, "🚀 かんたんスタート")
+        self.tabs.addTab(self.guide_browser, "🎨 ツール・機能ガイド")
+        self.tabs.addTab(self.shortcut_browser, "⌨️ ショートカット一覧")
+        self.tabs.addTab(self.tips_browser, "💡 活用コツ・Q&A")
+        self.tabs.addTab(self.readme_browser, "📄 Readme")
+
+        layout.addWidget(self.tabs, 1)
+
+        # フッター
+        footer = QHBoxLayout()
+        hint = QLabel("ヒント: F1キーでいつでもこのヘルプを開けます。上部検索欄でツールやショートカットを絞り込めます。", self)
+        hint.setStyleSheet("color: #666666; font-size: 9pt;")
+        footer.addWidget(hint, 1)
+
+        about_btn = QPushButton("ℹ️ バージョン情報", self)
+        about_btn.clicked.connect(self._open_about)
+        close_btn = QPushButton("閉じる", self)
+        close_btn.setDefault(True)
+        close_btn.clicked.connect(self.accept)
+        footer.addWidget(about_btn)
+        footer.addWidget(close_btn)
+        layout.addLayout(footer)
+
+        self._render_quick_start()
+        self._render_readme()
+        self._apply_filter("")
+
+        if 0 <= initial_tab < self.tabs.count():
+            self.tabs.setCurrentIndex(initial_tab)
+
+    def _make_browser(self):
+        b = QTextBrowser(self)
+        b.setOpenExternalLinks(True)
+        b.setFont(QFont(DEFAULT_FONT_FAMILY, 9))
+        b.setStyleSheet("QTextBrowser { background-color: #FFFFFF; border: none; padding: 8px; }")
+        return b
+
+    def _open_about(self):
+        dlg = AboutDialog(self.parent() or self)
+        dlg.exec()
+
+    def _render_quick_start(self):
+        html = f"""
+        <div style="font-family: '{DEFAULT_FONT_FAMILY}', sans-serif; font-size: 9pt; color: #222222;">
+          <div style="font-size: 11pt; font-weight: bold; color: #163B65; margin-bottom: 8px;">
+            最短 3 ステップで「撮って・書いて・すぐ伝える」
+          </div>
+
+          <table width="100%" cellpadding="10" cellspacing="6">
+            <tr>
+              <td width="33%" valign="top" style="background-color: #EEF5FD; border: 1px solid #C6DDF5;">
+                <div style="font-size: 10pt; font-weight: bold; color: #005FB8; margin-bottom: 4px;">STEP 1. 用意する</div>
+                <div>
+                  ・<b>📸 画面撮影</b>（Ctrl+Shift+A）で画面を切り取り<br>
+                  ・<b>📂 開く</b> またはドラッグ＆ドロップで画像・PDFを開く<br>
+                  ・スクショ後に <b>Ctrl+V</b> で即貼り付け
+                </div>
+              </td>
+              <td width="33%" valign="top" style="background-color: #EEF8F0; border: 1px solid #C3E3C8;">
+                <div style="font-size: 10pt; font-weight: bold; color: #2E7D32; margin-bottom: 4px;">STEP 2. サッと書く</div>
+                <div>
+                  ・<b>💬 吹き出し (B)</b> や <b>矢印 (A)</b> で指し示す<br>
+                  ・<b>🔦 スポットライト (S)</b> で注目箇所を際立たせる<br>
+                  ・上段の<b>8色パレット</b>で1クリック色変更
+                </div>
+              </td>
+              <td width="33%" valign="top" style="background-color: #FFF6E8; border: 1px solid #F3D4A5;">
+                <div style="font-size: 10pt; font-weight: bold; color: #C66A00; margin-bottom: 4px;">STEP 3. すぐ送る</div>
+                <div>
+                  ・<b>📋 画像コピー</b>（Ctrl+Shift+C）を1クリック<br>
+                  ・チャットやメール・資料に <b>Ctrl+V</b> で送信完了<br>
+                  ・必要なら <b>💾 保存</b> や <b>📦 .hwi保存</b> で残す
+                </div>
+              </td>
+            </tr>
+          </table>
+
+          <div style="font-size: 10pt; font-weight: bold; color: #163B65; margin-top: 12px; margin-bottom: 6px;">
+            よく使うおすすめ機能ピックアップ
+          </div>
+          <table width="100%" cellpadding="6" cellspacing="0" style="border-collapse: collapse;">
+            <tr style="background-color: #F4F6F9;">
+              <td width="160" style="border-bottom: 1px solid #E1E5EB;"><b>💬 吹き出し (B)</b></td>
+              <td style="border-bottom: 1px solid #E1E5EB;">指したい場所からドラッグしてコメント入力。しっぽ先端は後からオレンジ丸ハンドルで自由に動かせます。</td>
+            </tr>
+            <tr>
+              <td style="border-bottom: 1px solid #E1E5EB;"><b>🔦 スポットライト (S)</b></td>
+              <td style="border-bottom: 1px solid #E1E5EB;">見せたい部分だけ明るく残して周囲を暗く強調。複雑な画面でも一目で伝わります。</td>
+            </tr>
+            <tr style="background-color: #F4F6F9;">
+              <td style="border-bottom: 1px solid #E1E5EB;"><b>🏁 モザイク (M)</b></td>
+              <td style="border-bottom: 1px solid #E1E5EB;">名前や住所・金額などの機密情報をドラッグするだけで手軽に目隠しできます。</td>
+            </tr>
+            <tr>
+              <td style="border-bottom: 1px solid #E1E5EB;"><b>🔢 連番スタンプ (N)</b></td>
+              <td style="border-bottom: 1px solid #E1E5EB;">クリックするだけで 1, 2, 3... の丸数字を順番に配置。手順説明に便利です。</td>
+            </tr>
+            <tr style="background-color: #F4F6F9;">
+              <td style="border-bottom: 1px solid #E1E5EB;"><b>✂️ 切り抜き (C)</b></td>
+              <td style="border-bottom: 1px solid #E1E5EB;">不要な余白や周辺部分をカットして、伝えたい部分だけをスッキリ送れます。</td>
+            </tr>
+            <tr>
+              <td style="border-bottom: 1px solid #E1E5EB;"><b>💉 スポイト (I)</b></td>
+              <td style="border-bottom: 1px solid #E1E5EB;">左クリックで線色、右クリックで背景/塗色に画像の色を取得。文字の消し込みにも活躍します。</td>
+            </tr>
+          </table>
+        </div>
+        """
+        self.quick_browser.setHtml(html)
+
+    def _render_readme(self):
+        readme_path = find_readme_path()
+        if os.path.exists(readme_path):
+            try:
+                with open(readme_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+            except Exception as e:
+                content = f"ファイルの読み込みに失敗しました:\n{e}"
+        else:
+            content = f"READMEファイルが見つかりませんでした。\n検索パス: {readme_path}"
+        self.readme_browser.setMarkdown(content)
+
+    def _on_search_changed(self, text):
+        query = text.strip()
+        g_cnt, s_cnt, t_cnt = self._apply_filter(query)
+        if query:
+            self.tabs.setTabText(1, f"🎨 ツールガイド ({g_cnt})")
+            self.tabs.setTabText(2, f"⌨️ ショートカット ({s_cnt})")
+            self.tabs.setTabText(3, f"💡 活用コツ・Q&A ({t_cnt})")
+            # かんたんスタートまたはReadmeタブで検索を始めたら最初にヒットしたタブへ自動誘導
+            cur = self.tabs.currentIndex()
+            if cur in (0, 4):
+                if g_cnt > 0:
+                    self.tabs.setCurrentIndex(1)
+                elif s_cnt > 0:
+                    self.tabs.setCurrentIndex(2)
+                elif t_cnt > 0:
+                    self.tabs.setCurrentIndex(3)
+        else:
+            self.tabs.setTabText(1, "🎨 ツール・機能ガイド")
+            self.tabs.setTabText(2, "⌨️ ショートカット一覧")
+            self.tabs.setTabText(3, "💡 活用コツ・Q&A")
+
+    def _apply_filter(self, query):
+        q = query.lower()
+
+        # 1. ツールガイド
+        guide_parts = [f"<div style=\"font-family: '{DEFAULT_FONT_FAMILY}', sans-serif; font-size: 9pt; color: #222222;\">"]
+        guide_hits = 0
+        for cat_title, bg_hex, accent_hex, rows in self.TOOL_GUIDE_DATA:
+            matched = [
+                r for r in rows
+                if not q or q in cat_title.lower() or q in r[0].lower() or q in r[1].lower() or q in r[2].lower()
+            ]
+            if not matched:
+                continue
+            guide_hits += len(matched)
+            guide_parts.append(
+                f"<div style='background-color: {bg_hex}; border-left: 4px solid {accent_hex}; "
+                f"padding: 5px 10px; font-weight: bold; color: {accent_hex}; font-size: 10pt; margin-top: 8px;'>"
+                f"{cat_title}</div>"
+                "<table width='100%' cellpadding='6' cellspacing='0' style='border-collapse: collapse; margin-bottom: 6px;'>"
+            )
+            for name, key_hint, desc in matched:
+                guide_parts.append(
+                    f"<tr>"
+                    f"<td width='165' valign='top' style='border-bottom: 1px solid #E5E9EF;'><b>{name}</b></td>"
+                    f"<td width='105' valign='top' style='border-bottom: 1px solid #E5E9EF;'>"
+                    f"<span style='background-color: #EEF1F5; border: 1px solid #CFD6DF; padding: 1px 6px; color: #333333; font-size: 8pt;'>{key_hint}</span></td>"
+                    f"<td valign='top' style='border-bottom: 1px solid #E5E9EF;'>{desc}</td>"
+                    f"</tr>"
+                )
+            guide_parts.append("</table>")
+        if guide_hits == 0:
+            guide_parts.append("<p style='color: #777777; padding: 16px;'>該当するツール・機能が見つかりませんでした。</p>")
+        guide_parts.append("</div>")
+        self.guide_browser.setHtml("".join(guide_parts))
+
+        # 2. ショートカット一覧
+        sc_parts = [f"<div style=\"font-family: '{DEFAULT_FONT_FAMILY}', sans-serif; font-size: 9pt; color: #222222;\">"]
+        sc_hits = 0
+        for cat_title, rows in self.SHORTCUT_DATA:
+            matched = [
+                r for r in rows
+                if not q or q in cat_title.lower() or q in r[0].lower() or q in r[1].lower()
+            ]
+            if not matched:
+                continue
+            sc_hits += len(matched)
+            sc_parts.append(
+                f"<div style='background-color: #F0F4F9; border-left: 4px solid #005FB8; "
+                f"padding: 5px 10px; font-weight: bold; color: #163B65; font-size: 10pt; margin-top: 8px;'>"
+                f"{cat_title}</div>"
+                "<table width='100%' cellpadding='5' cellspacing='0' style='border-collapse: collapse; margin-bottom: 6px;'>"
+            )
+            for idx, (keys, desc) in enumerate(matched):
+                row_bg = "#FAFBFD" if idx % 2 == 1 else "#FFFFFF"
+                sc_parts.append(
+                    f"<tr style='background-color: {row_bg};'>"
+                    f"<td width='205' style='border-bottom: 1px solid #E6EAEF;'>"
+                    f"<span style='background-color: #EEF2F7; border: 1px solid #C4CEDB; padding: 2px 7px; font-weight: bold; color: #1A3C66;'>{keys}</span></td>"
+                    f"<td style='border-bottom: 1px solid #E6EAEF;'>{desc}</td>"
+                    f"</tr>"
+                )
+            sc_parts.append("</table>")
+        if sc_hits == 0:
+            sc_parts.append("<p style='color: #777777; padding: 16px;'>該当するショートカットが見つかりませんでした。</p>")
+        sc_parts.append("</div>")
+        self.shortcut_browser.setHtml("".join(sc_parts))
+
+        # 3. 活用コツ・Q&A
+        tips_parts = [f"<div style=\"font-family: '{DEFAULT_FONT_FAMILY}', sans-serif; font-size: 9pt; color: #222222;\">"]
+        tips_hits = 0
+        for title, body in self.TIPS_AND_FAQ_DATA:
+            if q and q not in title.lower() and q not in body.lower():
+                continue
+            tips_hits += 1
+            is_faq = title.startswith("❓")
+            bg = "#F8F9FB" if is_faq else "#F2F7FD"
+            accent = "#5C6BC0" if is_faq else "#005FB8"
+            body_html = body.replace("\n", "<br>")
+            tips_parts.append(
+                f"<table width='100%' cellpadding='8' cellspacing='0' style='margin-bottom: 8px; background-color: {bg}; border-left: 4px solid {accent}; border-top: 1px solid #E2E7EE; border-right: 1px solid #E2E7EE; border-bottom: 1px solid #E2E7EE;'>"
+                f"<tr><td>"
+                f"<div style='font-weight: bold; color: #163B65; font-size: 10pt; margin-bottom: 4px;'>{title}</div>"
+                f"<div style='color: #333333; line-height: 1.5;'>{body_html}</div>"
+                f"</td></tr></table>"
+            )
+        if tips_hits == 0:
+            tips_parts.append("<p style='color: #777777; padding: 16px;'>該当する活用コツ・Q&amp;Aが見つかりませんでした。</p>")
+        tips_parts.append("</div>")
+        self.tips_browser.setHtml("".join(tips_parts))
+
+        return guide_hits, sc_hits, tips_hits
+
+
 class AdvancedAnnotationApp(QMainWindow):
     TOOL_HINTS = {
-        "select": "アイテムをクリックして選択・移動 / ダブルクリックで文字編集 / 矢印キーで微調整",
-        "line": "ドラッグで描画 / Shiftキーを押しながらで水平・垂直・45°にスナップ",
-        "shape": "ドラッグで図形を描画（連番スタンプはクリックで配置）/ Shiftキーで正方形・正円",
+        "select": "クリックで選択・移動 / ダブルクリックで文字編集 / 矢印キーで微調整 / V・A・R・T・B等で素早くツール切替",
+        "line": "ドラッグで描画 / Shiftキーを押しながらで水平・垂直・45°にスナップ / [ ] キーで太さ変更",
+        "shape": "ドラッグで図形を描画（連番スタンプはクリック配置）/ Shiftキーで正方形・正円",
         "text": "左クリックで文字を配置 / 右クリックまたはEscキーでキャンセル",
+        "callout": "指したい場所から吹き出しを置きたい場所へドラッグ → コメント入力で一発作成",
+        "crop": "残したい範囲をドラッグして選択 → Enterキーまたは下のボタンで切り抜き確定（Escでキャンセル）",
         "margin": "周囲の青いバーを外へドラッグで余白拡張・内へドラッグで余白削減（色は背景/塗色）",
+        "eyedropper": "左クリックで線/枠色に色を取得 / 右クリック(またはShift+左クリック)で背景/塗色に取得",
     }
 
     def __init__(self):
@@ -2981,6 +4724,7 @@ class AdvancedAnnotationApp(QMainWindow):
         self.scene.stateChanged.connect(self.update_ui_state)
         self.scene.mouseSceneMoved.connect(self._update_cursor_coords)
         self.scene.statusMessageRequested.connect(self._show_status_hint)
+        self.scene.cropSelectionChanged.connect(self._on_crop_selection_changed)
 
         self.view = CustomGraphicsView(self.scene, self)
         self.view.zoomChanged.connect(self._on_zoom_changed)
@@ -2988,6 +4732,14 @@ class AdvancedAnnotationApp(QMainWindow):
         self.setCentralWidget(self.view)
 
         self.toast = ToastBanner(self.view.viewport())
+        self.crop_bar = CropActionBar(self.view.viewport())
+        self.crop_bar.confirmClicked.connect(self.confirm_crop)
+        self.crop_bar.cancelClicked.connect(self.cancel_crop)
+
+        self._prev_tool_before_eyedropper = "select"
+        self._capture_overlay = None
+        self._capture_insert_mode = False
+        self._capture_was_maximized = False
 
         self.current_pdf_doc = None
         self.current_pdf_page = 0
@@ -3023,6 +4775,113 @@ class AdvancedAnnotationApp(QMainWindow):
         super().resizeEvent(event)
         if self.toast.isVisible():
             self.toast._reposition()
+        if self.crop_bar.isVisible():
+            self.crop_bar.reposition()
+
+    def keyPressEvent(self, event):
+        """テキスト入力中でなければ1キーでツールや太さを瞬時に切り替える"""
+        if not self._is_text_input_focused():
+            mods = event.modifiers()
+            if mods == Qt.KeyboardModifier.NoModifier:
+                key = event.key()
+                if key == Qt.Key.Key_V:
+                    self.set_tool("select")
+                    event.accept()
+                    return
+                if key == Qt.Key.Key_L:
+                    self._select_line_combo_type("line")
+                    event.accept()
+                    return
+                if key == Qt.Key.Key_A:
+                    self._select_line_combo_type("arrow")
+                    event.accept()
+                    return
+                if key == Qt.Key.Key_P:
+                    self._select_line_combo_type("freehand")
+                    event.accept()
+                    return
+                if key == Qt.Key.Key_H:
+                    self._select_line_combo_type("marker")
+                    event.accept()
+                    return
+                if key == Qt.Key.Key_R:
+                    self._select_shape_combo_type("rect")
+                    event.accept()
+                    return
+                if key == Qt.Key.Key_O:
+                    self._select_shape_combo_type("ellipse")
+                    event.accept()
+                    return
+                if key == Qt.Key.Key_M:
+                    self._select_shape_combo_type("mosaic")
+                    event.accept()
+                    return
+                if key == Qt.Key.Key_N:
+                    self._select_shape_combo_type("stamp")
+                    event.accept()
+                    return
+                if key == Qt.Key.Key_S:
+                    self._select_shape_combo_type("spotlight")
+                    event.accept()
+                    return
+                if key == Qt.Key.Key_T:
+                    self.set_tool("text")
+                    event.accept()
+                    return
+                if key == Qt.Key.Key_B:
+                    self.set_tool("callout")
+                    event.accept()
+                    return
+                if key == Qt.Key.Key_C:
+                    self.set_tool("crop")
+                    event.accept()
+                    return
+                if key == Qt.Key.Key_I:
+                    self.set_tool("eyedropper")
+                    event.accept()
+                    return
+                if key == Qt.Key.Key_BracketLeft:
+                    self._step_pen_width(-1)
+                    event.accept()
+                    return
+                if key == Qt.Key.Key_BracketRight:
+                    self._step_pen_width(1)
+                    event.accept()
+                    return
+        super().keyPressEvent(event)
+
+    def _select_line_combo_type(self, line_type):
+        line_types = ["line", "arrow", "double_arrow", "freehand", "marker"]
+        if line_type in line_types:
+            idx = line_types.index(line_type)
+            self.line_combo.blockSignals(True)
+            self.line_combo.setCurrentIndex(idx)
+            self.line_combo.blockSignals(False)
+            self.scene.current_line_type = line_type
+            self.set_tool("line")
+
+    def _select_shape_combo_type(self, shape_type):
+        shape_types = ["rect", "rounded_rect", "ellipse", "triangle", "mosaic", "stamp", "spotlight"]
+        if shape_type in shape_types:
+            idx = shape_types.index(shape_type)
+            self.shape_combo.blockSignals(True)
+            self.shape_combo.setCurrentIndex(idx)
+            self.shape_combo.blockSignals(False)
+            self.scene.current_shape_type = shape_type
+            self.set_tool("shape")
+
+    def _step_pen_width(self, delta):
+        steps = [0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0, 15.0, 20.0, 30.0, 50.0]
+        cur = self.scene.pen_width
+        nearest = min(range(len(steps)), key=lambda i: abs(steps[i] - cur))
+        nxt = max(0, min(len(steps) - 1, nearest + delta))
+        new_val = steps[nxt]
+        self.width_combo.blockSignals(True)
+        self.width_combo.setCurrentText(str(new_val))
+        self.width_combo.blockSignals(False)
+        self.change_pen_width(new_val)
+        self._commit_pending_property_state()
+        self.show_toast(f"線の太さ: {new_val} px", 1000)
 
     def _on_system_clipboard_changed(self):
         self._clipboard_source = "system"
@@ -3087,6 +4946,15 @@ class AdvancedAnnotationApp(QMainWindow):
         open_clip_act.setShortcut(QKeySequence("Ctrl+Shift+V"))
         open_clip_act.triggered.connect(self.open_from_clipboard)
         file_menu.addAction(open_clip_act)
+
+        capture_act = QAction("画面を撮影して開く (範囲選択)", self)
+        capture_act.setShortcut(QKeySequence("Ctrl+Shift+A"))
+        capture_act.triggered.connect(lambda: self.start_screen_capture(insert_as_annotation=False))
+        file_menu.addAction(capture_act)
+
+        capture_ins_act = QAction("画面を撮影して注釈画像として挿入", self)
+        capture_ins_act.triggered.connect(lambda: self.start_screen_capture(insert_as_annotation=True))
+        file_menu.addAction(capture_ins_act)
 
         self.recent_menu = file_menu.addMenu("最近使ったファイル")
         self._rebuild_recent_menu()
@@ -3158,6 +5026,10 @@ class AdvancedAnnotationApp(QMainWindow):
         edit_menu.addAction(sel_all_act)
 
         edit_menu.addSeparator()
+
+        crop_menu_act = QAction("切り抜き (トリミング) (C)", self)
+        crop_menu_act.triggered.connect(lambda: self.set_tool("crop"))
+        edit_menu.addAction(crop_menu_act)
 
         rotate_menu = edit_menu.addMenu("キャンバスを回転")
         rot_cw = QAction("右に90°回転", self)
@@ -3250,99 +5122,50 @@ class AdvancedAnnotationApp(QMainWindow):
         # --- ヘルプメニュー ---
         help_menu = menubar.addMenu("ヘルプ")
 
-        shortcuts_action = QAction("操作・ショートカット一覧", self)
-        shortcuts_action.setShortcut(QKeySequence("F1"))
+        help_center_action = QAction("📖 使い方ガイド / ヘルプセンター", self)
+        help_center_action.setShortcut(QKeySequence("F1"))
+        help_center_action.triggered.connect(lambda: self.show_help_center(0))
+        help_menu.addAction(help_center_action)
+
+        tool_guide_action = QAction("🎨 ツール・機能ガイド", self)
+        tool_guide_action.triggered.connect(lambda: self.show_help_center(1))
+        help_menu.addAction(tool_guide_action)
+
+        shortcuts_action = QAction("⌨️ キーボードショートカット一覧", self)
         shortcuts_action.triggered.connect(self.show_shortcuts_dialog)
         help_menu.addAction(shortcuts_action)
 
-        readme_action = QAction("Readmeを表示", self)
+        tips_action = QAction("💡 素早く伝えるコツ・Q&A", self)
+        tips_action.triggered.connect(lambda: self.show_help_center(3))
+        help_menu.addAction(tips_action)
+
+        readme_action = QAction("📄 Readmeを表示", self)
         readme_action.triggered.connect(self.show_readme)
         help_menu.addAction(readme_action)
 
         help_menu.addSeparator()
 
-        version_action = QAction("バージョン情報", self)
+        version_action = QAction("ℹ️ バージョン情報", self)
         version_action.triggered.connect(self.show_version_info)
         help_menu.addAction(version_action)
 
-    def show_shortcuts_dialog(self):
-        """よく使う操作とショートカットキーを分かりやすく一覧表示する"""
-        html = """
-        <h3>主なショートカット・便利操作</h3>
-        <table cellpadding="5" cellspacing="0" width="100%">
-        <tr><td><b>Ctrl + N</b></td><td>新規白紙キャンバスを作成</td></tr>
-        <tr><td><b>Ctrl + O</b></td><td>画像・PDF・プロジェクト(.hwi)を開く（ドラッグ＆ドロップにも対応）</td></tr>
-        <tr><td><b>Ctrl + S / Ctrl + Shift + S</b></td><td>上書き保存 / 名前を付けて保存</td></tr>
-        <tr><td><b>Ctrl + P</b></td><td>プロジェクト(.hwi)として保存</td></tr>
-        <tr><td><b>Ctrl + Shift + V</b></td><td>クリップボードの画像を新規キャンバスとして開く</td></tr>
-        <tr><td><b>Ctrl + Shift + C</b></td><td>注釈済み完成画像をクリップボードにコピー</td></tr>
-        <tr><td><b>Ctrl + Z / Ctrl + Y</b></td><td>元に戻す / やり直す</td></tr>
-        <tr><td><b>Ctrl + C / Ctrl + V / Ctrl + D</b></td><td>コピー / 貼り付け（外部画像も可） / 複製</td></tr>
-        <tr><td><b>Ctrl + A / Delete</b></td><td>すべて選択 / 選択アイテムを削除</td></tr>
-        <tr><td><b>矢印キー / Shift + 矢印キー</b></td><td>選択アイテムを1px / 10px移動</td></tr>
-        <tr><td><b>Shift + ドラッグ描画</b></td><td>直線・矢印を水平・垂直・45°固定 / 図形を正方形・正円固定</td></tr>
-        <tr><td><b>Ctrl + ホイール</b></td><td>カーソル位置を中心に拡大・縮小</td></tr>
-        <tr><td><b>Shift + ホイール</b></td><td>横スクロール</td></tr>
-        <tr><td><b>Space + ドラッグ / 中ボタンドラッグ</b></td><td>キャンバスを手のひらスクロール（パン移動）</td></tr>
-        <tr><td><b>Ctrl + G</b></td><td>補助グリッドの表示切り替え</td></tr>
-        <tr><td><b>テキスト・スタンプをダブルクリック</b></td><td>文字内容やスタンプ番号をすぐ編集</td></tr>
-        <tr><td><b>Ctrl + ファイルドロップ</b></td><td>ドロップした画像を注釈としてキャンバス内に挿入</td></tr>
-        </table>
-        """
-        dialog = QDialog(self)
-        dialog.setWindowTitle("操作・ショートカット一覧")
-        dialog.resize(560, 480)
-        layout = QVBoxLayout(dialog)
-
-        browser = QTextBrowser(dialog)
-        browser.setHtml(html)
-        layout.addWidget(browser)
-
-        close_btn = QPushButton("閉じる", dialog)
-        close_btn.clicked.connect(dialog.accept)
-        btn_row = QHBoxLayout()
-        btn_row.addStretch()
-        btn_row.addWidget(close_btn)
-        layout.addLayout(btn_row)
+    def show_help_center(self, initial_tab=0):
+        """検索対応・タブ切替式の統合ヘルプセンターを開く"""
+        dialog = HelpCenterDialog(self, initial_tab=initial_tab)
         dialog.exec()
+
+    def show_shortcuts_dialog(self):
+        """統合ヘルプセンターのショートカット一覧タブを開く"""
+        self.show_help_center(2)
 
     def show_readme(self):
-        """README.MDを読み込み、見やすく整形して専用ウィンドウで表示する"""
-        readme_path = find_readme_path()
-        content = ""
-
-        if os.path.exists(readme_path):
-            try:
-                with open(readme_path, "r", encoding="utf-8") as f:
-                    content = f.read()
-            except Exception as e:
-                content = f"ファイルの読み込みに失敗しました:\n{e}"
-        else:
-            content = f"READMEファイルが見つかりませんでした。\n検索パス: {readme_path}"
-
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Readme")
-        dialog.resize(660, 520)
-        layout = QVBoxLayout(dialog)
-
-        viewer = QTextBrowser(dialog)
-        viewer.setOpenExternalLinks(True)
-        viewer.setFont(QFont(DEFAULT_FONT_FAMILY, 10))
-        viewer.setMarkdown(content)
-        layout.addWidget(viewer)
-
-        close_btn = QPushButton("閉じる", dialog)
-        close_btn.clicked.connect(dialog.accept)
-        btn_row = QHBoxLayout()
-        btn_row.addStretch()
-        btn_row.addWidget(close_btn)
-        layout.addLayout(btn_row)
-        dialog.exec()
+        """統合ヘルプセンターのReadmeタブを開く"""
+        self.show_help_center(4)
 
     def show_version_info(self):
-        """バージョン情報をメッセージボックスで表示する"""
-        msg = f"{APP_NAME}\nバージョン: {APP_VERSION}\n\nPyQt6ベースの高機能アノテーションツール"
-        QMessageBox.about(self, "バージョン情報", msg)
+        """リッチなバージョン情報ダイアログを表示する"""
+        dialog = AboutDialog(self)
+        dialog.exec()
 
     def init_toolbar(self):
         # ＝＝＝ 1段目のツールバー（ファイル操作、表示、ページ遷移） ＝＝＝
@@ -3375,6 +5198,16 @@ class AdvancedAnnotationApp(QMainWindow):
         open_action.setToolTip("画像・PDF・プロジェクトファイルを開く (Ctrl+O)")
         open_action.triggered.connect(self.open_file)
         toolbar1.addAction(open_action)
+
+        capture_toolbar_action = QAction("📸 画面撮影", self)
+        capture_toolbar_action.setToolTip("画面の任意範囲を撮影してすぐ編集 (Ctrl+Shift+A)")
+        capture_toolbar_action.triggered.connect(lambda: self.start_screen_capture(insert_as_annotation=False))
+        toolbar1.addAction(capture_toolbar_action)
+
+        copy_img_toolbar_action = QAction("📋 画像コピー", self)
+        copy_img_toolbar_action.setToolTip("完成画像をクリップボードへコピーして即貼り付け共有 (Ctrl+Shift+C)")
+        copy_img_toolbar_action.triggered.connect(self.copy_canvas_to_clipboard)
+        toolbar1.addAction(copy_img_toolbar_action)
 
         toolbar1.addSeparator()
 
@@ -3414,6 +5247,28 @@ class AdvancedAnnotationApp(QMainWindow):
         zoom_fit_action.triggered.connect(self.fit_to_view)
         toolbar1.addAction(zoom_fit_action)
 
+        toolbar1.addSeparator()
+
+        # クイックカラーパレット（1クリック色切替）＋ スポイト
+        palette_widget = QWidget(self)
+        palette_layout = QHBoxLayout(palette_widget)
+        palette_layout.setContentsMargins(2, 0, 2, 0)
+        palette_layout.setSpacing(3)
+        for cname, chex in QUICK_COLORS:
+            sw = ColorSwatchButton(cname, chex, palette_widget)
+            sw.leftPicked.connect(self._apply_quick_color_left)
+            sw.rightPicked.connect(self._apply_quick_color_right)
+            palette_layout.addWidget(sw)
+        toolbar1.addWidget(palette_widget)
+
+        self.tool_actions = {}
+        act_eyedropper = QAction("💉 スポイト", self)
+        act_eyedropper.setCheckable(True)
+        act_eyedropper.setToolTip("画像上の色を取得 (I) [左クリック: 線/枠色 / 右クリック: 背景/塗色]")
+        act_eyedropper.triggered.connect(lambda checked: self.set_tool("eyedropper"))
+        toolbar1.addAction(act_eyedropper)
+        self.tool_actions["eyedropper"] = act_eyedropper
+
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         toolbar1.addWidget(spacer)
@@ -3445,10 +5300,9 @@ class AdvancedAnnotationApp(QMainWindow):
         toolbar2.setIconSize(QSize(14, 14))
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, toolbar2)
 
-        self.tool_actions = {}
         act_sel = QAction("↖️ 選択/移動", self)
         act_sel.setCheckable(True)
-        act_sel.setToolTip("注釈の選択・移動・リサイズ (Esc)")
+        act_sel.setToolTip("注釈の選択・移動・リサイズ (V / Esc)")
         act_sel.triggered.connect(lambda checked: self.set_tool("select"))
         toolbar2.addAction(act_sel)
         self.tool_actions["select"] = act_sel
@@ -3457,45 +5311,59 @@ class AdvancedAnnotationApp(QMainWindow):
 
         act_line = QAction("📏 線", self)
         act_line.setCheckable(True)
-        act_line.setToolTip("線・矢印・フリーハンド・マーカーを描画 (Shiftで角度固定)")
+        act_line.setToolTip("線・矢印・曲線・マーカーを描画 (L / A / P / H / Shiftで角度固定)")
         act_line.triggered.connect(lambda checked: self.set_tool("line"))
         toolbar2.addAction(act_line)
         self.tool_actions["line"] = act_line
 
         self.line_combo = QComboBox(self)
-        self.line_combo.addItems(["直線", "矢印", "両矢印", "曲線(フリーハンド)", "マーカー(半透明)"])
+        self.line_combo.addItems(["直線", "矢印", "両矢印", "曲線", "マーカー"])
         self.line_combo.setToolTip("線の種類を選択")
         self.line_combo.currentIndexChanged.connect(self.change_line_type)
         toolbar2.addWidget(self.line_combo)
 
         act_shape = QAction("🔲 図形", self)
         act_shape.setCheckable(True)
-        act_shape.setToolTip("図形・モザイク目隠し・連番スタンプを配置 (Shiftで正方形・正円)")
+        act_shape.setToolTip("図形・モザイク・連番スタンプ・スポットライト (R / O / M / N / S)")
         act_shape.triggered.connect(lambda checked: self.set_tool("shape"))
         toolbar2.addAction(act_shape)
         self.tool_actions["shape"] = act_shape
 
         self.shape_combo = QComboBox(self)
-        self.shape_combo.addItems(["四角", "角丸四角", "丸/楕円", "三角", "モザイク(目隠し)", "連番スタンプ"])
-        self.shape_combo.setToolTip("図形・スタンプの種類を選択")
+        self.shape_combo.addItems(["四角", "角丸四角", "丸/楕円", "三角", "モザイク", "連番スタンプ", "スポットライト"])
+        self.shape_combo.setToolTip("図形・目隠し・スタンプ・注目枠を選択")
         self.shape_combo.currentIndexChanged.connect(self.change_shape_type)
         toolbar2.addWidget(self.shape_combo)
 
         act_text = QAction("🔤 文字", self)
         act_text.setCheckable(True)
-        act_text.setToolTip("テキストを入力して好きな位置へ配置")
+        act_text.setToolTip("テキストを入力して好きな位置へ配置 (T)")
         act_text.triggered.connect(lambda checked: self.set_tool("text"))
         toolbar2.addAction(act_text)
         self.tool_actions["text"] = act_text
+
+        act_callout = QAction("💬 吹き出し", self)
+        act_callout.setCheckable(True)
+        act_callout.setToolTip("矢印しっぽ付き吹き出しをドラッグで一発作成 (B)")
+        act_callout.triggered.connect(lambda checked: self.set_tool("callout"))
+        toolbar2.addAction(act_callout)
+        self.tool_actions["callout"] = act_callout
 
         act_insert_img = QAction("🖼️ 画像挿入", self)
         act_insert_img.setToolTip("別の画像やPDFページを注釈として挿入")
         act_insert_img.triggered.connect(self.insert_image)
         toolbar2.addAction(act_insert_img)
 
-        act_add_margin = QAction("⏹️ 余白調整(ドラッグ)", self)
+        act_crop = QAction("✂️ 切り抜き", self)
+        act_crop.setCheckable(True)
+        act_crop.setToolTip("必要な範囲だけをドラッグしてトリミング (C)")
+        act_crop.triggered.connect(lambda checked: self.set_tool("crop"))
+        toolbar2.addAction(act_crop)
+        self.tool_actions["crop"] = act_crop
+
+        act_add_margin = QAction("⏹️ 余白調整", self)
         act_add_margin.setCheckable(True)
-        act_add_margin.setToolTip("青いバーをドラッグして余白を拡張・削減")
+        act_add_margin.setToolTip("周囲の青いバーをドラッグして余白を拡張・削減")
         act_add_margin.triggered.connect(lambda checked: self.set_tool("margin"))
         toolbar2.addAction(act_add_margin)
         self.tool_actions["margin"] = act_add_margin
@@ -3512,22 +5380,22 @@ class AdvancedAnnotationApp(QMainWindow):
 
         # 色設定（現在の選択色をスウォッチアイコンで可視化）
         self.pen_color_action = QAction("線/枠色", self)
-        self.pen_color_action.setToolTip("線・枠線・スタンプの色を選択")
+        self.pen_color_action.setToolTip("線・枠線・吹き出し枠・スタンプの色を選択")
         self.pen_color_action.triggered.connect(self.choose_pen_color)
         toolbar2.addAction(self.pen_color_action)
 
         self.text_color_action = QAction("文字色", self)
-        self.text_color_action.setToolTip("テキストの文字色を選択")
+        self.text_color_action.setToolTip("テキスト・吹き出しの文字色を選択")
         self.text_color_action.triggered.connect(self.choose_text_color)
         toolbar2.addAction(self.text_color_action)
 
         self.brush_color_action = QAction("背景/塗色", self)
-        self.brush_color_action.setToolTip("図形・文字背景・余白の塗りつぶし色を選択")
+        self.brush_color_action.setToolTip("図形・吹き出し・文字背景・余白の塗りつぶし色を選択")
         self.brush_color_action.triggered.connect(self.choose_brush_color)
         toolbar2.addAction(self.brush_color_action)
 
         self.fill_combo = QComboBox(self)
-        self.fill_combo.addItems(["透過 (枠のみ)", "塗りつぶし", "半透明塗り"])
+        self.fill_combo.addItems(["透過(枠)", "塗りつぶし", "半透明塗り"])
         self.fill_combo.setToolTip("図形やテキスト背景の塗りつぶしモードを選択")
         self.fill_combo.currentIndexChanged.connect(self.change_fill_mode)
         toolbar2.addWidget(self.fill_combo)
@@ -3731,32 +5599,61 @@ class AdvancedAnnotationApp(QMainWindow):
             self.scene.removeItem(self.scene.pending_text_item)
             self.scene.pending_text_item = None
 
-        if tool_id == "margin" and self.scene.bg_item is None:
-            QMessageBox.information(self, "案内", "余白調整を使うには、先に画像やPDFを開くか新規キャンバスを作成してください。")
+        if tool_id != "crop":
+            self.scene.clear_crop_selection()
+            self.crop_bar.hide()
+
+        if tool_id != "eyedropper":
+            self.scene.clear_eyedropper()
+
+        if tool_id in ("margin", "crop", "eyedropper") and self.scene.bg_item is None:
+            tool_names = {"margin": "余白調整", "crop": "切り抜き", "eyedropper": "スポイト"}
+            QMessageBox.information(
+                self, "案内",
+                f"{tool_names[tool_id]}を使うには、先に画像やPDFを開くか画面撮影・新規キャンバス作成を行ってください。"
+            )
             tool_id = "select"
 
-        if tool_id in ("line", "shape", "text") and self.scene.bg_item is None:
+        if tool_id == "eyedropper":
+            if self.scene.current_tool not in ("eyedropper", "crop", "margin"):
+                self._prev_tool_before_eyedropper = self.scene.current_tool
+            sampled = self._render_scene_to_image(self.scene, Qt.GlobalColor.white)
+            self.scene.set_eyedropper_image(sampled)
+
+        if tool_id in ("line", "shape", "text", "callout") and self.scene.bg_item is None:
             blank = QPixmap(1280, 720)
             blank.fill(Qt.GlobalColor.white)
             self._load_pixmap_as_new_canvas(blank, "canvas")
             self.show_toast("白紙キャンバス (1280 × 720 px) を自動作成しました", 2000)
 
         if tool_id == "text":
-            text, ok = QInputDialog.getMultiLineText(
-                self, "テキスト入力", "キャンバスに配置する文字を入力してください:"
+            dlg = QuickTextDialog(
+                self,
+                title="テキスト入力",
+                prompt="キャンバスに配置する文字を入力してください (Ctrl+Enterで確定):",
+                recent_texts=self.scene.recent_texts,
+                show_bg_option=True,
+                initial_bg_checked=self.scene.use_fill,
             )
-            if ok and text:
+            if dlg.exec() == QDialog.DialogCode.Accepted and dlg.get_text():
+                text = dlg.get_text()
+                self.scene.remember_recent_text(text)
+                want_bg = dlg.want_background()
                 font = QFont(self.scene.current_font_family)
                 font.setPointSizeF(max(4.0, self.scene.current_font_size))
                 font.setBold(self.scene.current_font_bold)
                 font.setItalic(self.scene.current_font_italic)
 
-                brush = self.scene.get_current_brush()
-                if self.scene.use_fill:
+                if want_bg:
+                    bg_color = QColor(self.scene.current_brush_color)
+                    if self.scene.current_fill_mode == 2 and bg_color.alpha() == 255:
+                        bg_color.setAlpha(95)
+                    brush = QBrush(bg_color)
                     pen = QPen(self.scene.current_pen_color)
                     pen.setWidthF(self.scene.pen_width)
                     pen.setStyle(self.scene.current_pen_style)
                 else:
+                    brush = QBrush(Qt.BrushStyle.NoBrush)
                     pen = QPen(Qt.PenStyle.NoPen)
 
                 text_item = CustomTextItem(text)
@@ -3809,7 +5706,7 @@ class AdvancedAnnotationApp(QMainWindow):
             self.set_tool("line")
 
     def change_shape_type(self, index):
-        shape_types = ["rect", "rounded_rect", "ellipse", "triangle", "mosaic", "stamp"]
+        shape_types = ["rect", "rounded_rect", "ellipse", "triangle", "mosaic", "stamp", "spotlight"]
         if 0 <= index < len(shape_types):
             self.scene.current_shape_type = shape_types[index]
             self.set_tool("shape")
@@ -3841,7 +5738,7 @@ class AdvancedAnnotationApp(QMainWindow):
 
             changed = False
             for item in self.scene.selectedItems():
-                if isinstance(item, CustomTextItem):
+                if isinstance(item, (CustomTextItem, CalloutItem)):
                     item.setFont(font)
                     changed = True
             if changed:
@@ -3853,7 +5750,7 @@ class AdvancedAnnotationApp(QMainWindow):
         self.scene.current_font_bold = bool(checked)
         changed = False
         for item in self.scene.selectedItems():
-            if isinstance(item, CustomTextItem):
+            if isinstance(item, (CustomTextItem, CalloutItem)):
                 f = item.font()
                 f.setBold(bool(checked))
                 item.setFont(f)
@@ -3867,7 +5764,7 @@ class AdvancedAnnotationApp(QMainWindow):
         self.scene.current_font_italic = bool(checked)
         changed = False
         for item in self.scene.selectedItems():
-            if isinstance(item, CustomTextItem):
+            if isinstance(item, (CustomTextItem, CalloutItem)):
                 f = item.font()
                 f.setItalic(bool(checked))
                 item.setFont(f)
@@ -3918,7 +5815,7 @@ class AdvancedAnnotationApp(QMainWindow):
         self.font_size_combo.blockSignals(True)
         self.fill_combo.blockSignals(True)
 
-        if isinstance(item, (CustomLineItem, ArrowItem, CustomRectItem, CustomEllipseItem, CustomPolygonItem, CustomPathItem)):
+        if isinstance(item, (CustomLineItem, ArrowItem, CustomRectItem, CustomEllipseItem, CustomPolygonItem, CustomPathItem, SpotlightItem)):
             pen = item.pen()
             self.scene.current_pen_color = pen.color()
             self.scene.pen_width = max(0.5, pen.widthF())
@@ -3943,7 +5840,7 @@ class AdvancedAnnotationApp(QMainWindow):
                     self.scene.current_fill_mode = 0
                     self.fill_combo.setCurrentIndex(0)
 
-        elif isinstance(item, CustomTextItem):
+        elif isinstance(item, (CustomTextItem, CalloutItem)):
             self.scene.current_text_color = item.defaultTextColor()
             font = item.font()
             self.scene.current_font_family = font.family()
@@ -3959,6 +5856,9 @@ class AdvancedAnnotationApp(QMainWindow):
             if pen.style() != Qt.PenStyle.NoPen:
                 self.scene.current_pen_color = pen.color()
                 self.scene.pen_width = max(0.5, pen.widthF())
+                self.scene.current_pen_style = pen.style()
+                if pen.style() in self.pen_style_actions:
+                    self.pen_style_actions[pen.style()].setChecked(True)
                 self.width_combo.setCurrentText(str(round(self.scene.pen_width, 1)))
 
             brush = item.brush()
@@ -3985,6 +5885,87 @@ class AdvancedAnnotationApp(QMainWindow):
         self.fill_combo.blockSignals(False)
         self.update_color_icons()
 
+    def _apply_quick_color_left(self, color, shift_held):
+        selected = [
+            it for it in self.scene.selectedItems()
+            if it != self.scene.bg_item and not isinstance(it, MarginHandleItem)
+        ]
+        if shift_held or (selected and all(isinstance(it, CustomTextItem) for it in selected)):
+            self._apply_text_color_value(color)
+            self.show_toast(f"文字色を {color.name().upper()} に変更しました", 1200)
+        else:
+            self._apply_pen_color_value(color)
+            self.show_toast(f"線/枠色を {color.name().upper()} に変更しました", 1200)
+
+    def _apply_quick_color_right(self, color):
+        self._apply_brush_color_value(color, enable_fill_if_needed=True)
+        self.show_toast(f"背景/塗色を {color.name().upper()} に変更しました", 1200)
+
+    def apply_eyedropper_color(self, color, target="pen"):
+        if target == "brush":
+            self._apply_brush_color_value(color, enable_fill_if_needed=True)
+            self.show_toast(f"スポイト: 背景/塗色に {color.name().upper()} を取得しました", 2000)
+        else:
+            self._apply_pen_color_value(color)
+            self.show_toast(f"スポイト: 線/枠色に {color.name().upper()} を取得しました", 2000)
+        self.set_tool(self._prev_tool_before_eyedropper or "select")
+
+    def _apply_pen_color_value(self, color):
+        self.scene.current_pen_color = QColor(color)
+        self.update_color_icons()
+        changed = False
+        for item in self.scene.selectedItems():
+            if isinstance(item, (CustomLineItem, ArrowItem, CustomRectItem, CustomEllipseItem, CustomPolygonItem, CustomPathItem, CalloutItem, SpotlightItem)):
+                pen = QPen(item.pen())
+                pen.setColor(color)
+                item.setPen(pen)
+                changed = True
+            elif isinstance(item, CustomTextItem):
+                if item.pen().style() != Qt.PenStyle.NoPen:
+                    pen = QPen(item.pen())
+                    pen.setColor(color)
+                    item.setPen(pen)
+                    changed = True
+            elif isinstance(item, NumberStampItem):
+                item.setBgColor(color)
+                changed = True
+        if changed:
+            self.scene.has_unsaved_changes = True
+            self.scene.save_state()
+
+    def _apply_text_color_value(self, color):
+        self.scene.current_text_color = QColor(color)
+        self.update_color_icons()
+        changed = False
+        for item in self.scene.selectedItems():
+            if isinstance(item, (CustomTextItem, CalloutItem)):
+                item.setDefaultTextColor(color)
+                changed = True
+            elif isinstance(item, NumberStampItem):
+                item.setTextColor(color)
+                changed = True
+        if changed:
+            self.scene.has_unsaved_changes = True
+            self.scene.save_state()
+
+    def _apply_brush_color_value(self, color, enable_fill_if_needed=False):
+        self.scene.current_brush_color = QColor(color)
+        if enable_fill_if_needed and not self.scene.use_fill:
+            self.scene.current_fill_mode = 1
+            self.fill_combo.blockSignals(True)
+            self.fill_combo.setCurrentIndex(1)
+            self.fill_combo.blockSignals(False)
+        self.update_color_icons()
+        changed = False
+        for item in self.scene.selectedItems():
+            if isinstance(item, (CustomRectItem, CustomEllipseItem, CustomPolygonItem, CustomPathItem, CustomTextItem, CalloutItem)):
+                if item.brush().style() != Qt.BrushStyle.NoBrush or self.scene.use_fill:
+                    item.setBrush(self.scene.get_current_brush())
+                    changed = True
+        if changed:
+            self.scene.has_unsaved_changes = True
+            self.scene.save_state()
+
     def choose_pen_color(self):
         """線や枠・スタンプの色を変更"""
         color = QColorDialog.getColor(
@@ -3992,27 +5973,7 @@ class AdvancedAnnotationApp(QMainWindow):
             QColorDialog.ColorDialogOption.ShowAlphaChannel
         )
         if color.isValid():
-            self.scene.current_pen_color = color
-            self.update_color_icons()
-            changed = False
-            for item in self.scene.selectedItems():
-                if isinstance(item, (CustomLineItem, ArrowItem, CustomRectItem, CustomEllipseItem, CustomPolygonItem, CustomPathItem)):
-                    pen = QPen(item.pen())
-                    pen.setColor(color)
-                    item.setPen(pen)
-                    changed = True
-                elif isinstance(item, CustomTextItem):
-                    if item.pen().style() != Qt.PenStyle.NoPen:
-                        pen = QPen(item.pen())
-                        pen.setColor(color)
-                        item.setPen(pen)
-                        changed = True
-                elif isinstance(item, NumberStampItem):
-                    item.setBgColor(color)
-                    changed = True
-            if changed:
-                self.scene.has_unsaved_changes = True
-                self.scene.save_state()
+            self._apply_pen_color_value(color)
 
     def choose_text_color(self):
         """文字の色を変更"""
@@ -4021,19 +5982,7 @@ class AdvancedAnnotationApp(QMainWindow):
             QColorDialog.ColorDialogOption.ShowAlphaChannel
         )
         if color.isValid():
-            self.scene.current_text_color = color
-            self.update_color_icons()
-            changed = False
-            for item in self.scene.selectedItems():
-                if isinstance(item, CustomTextItem):
-                    item.setDefaultTextColor(color)
-                    changed = True
-                elif isinstance(item, NumberStampItem):
-                    item.setTextColor(color)
-                    changed = True
-            if changed:
-                self.scene.has_unsaved_changes = True
-                self.scene.save_state()
+            self._apply_text_color_value(color)
 
     def choose_brush_color(self):
         """背景や塗りつぶしの色を変更"""
@@ -4042,17 +5991,7 @@ class AdvancedAnnotationApp(QMainWindow):
             QColorDialog.ColorDialogOption.ShowAlphaChannel
         )
         if color.isValid():
-            self.scene.current_brush_color = color
-            self.update_color_icons()
-            changed = False
-            for item in self.scene.selectedItems():
-                if isinstance(item, (CustomRectItem, CustomEllipseItem, CustomPolygonItem, CustomPathItem, CustomTextItem)):
-                    if item.brush().style() != Qt.BrushStyle.NoBrush or self.scene.use_fill:
-                        item.setBrush(self.scene.get_current_brush())
-                        changed = True
-            if changed:
-                self.scene.has_unsaved_changes = True
-                self.scene.save_state()
+            self._apply_brush_color_value(color)
 
     def change_fill_mode(self, index):
         """透過モード・塗りつぶしモード・半透明塗りを切り替え"""
@@ -4060,7 +5999,7 @@ class AdvancedAnnotationApp(QMainWindow):
         brush = self.scene.get_current_brush()
         changed = False
         for item in self.scene.selectedItems():
-            if isinstance(item, (CustomRectItem, CustomEllipseItem, CustomPolygonItem, CustomPathItem)):
+            if isinstance(item, (CustomRectItem, CustomEllipseItem, CustomPolygonItem, CustomPathItem, CalloutItem)):
                 item.setBrush(brush)
                 changed = True
             elif isinstance(item, CustomTextItem):
@@ -4106,7 +6045,7 @@ class AdvancedAnnotationApp(QMainWindow):
         self.scene.pen_width = value
         changed = False
         for item in self.scene.selectedItems():
-            if isinstance(item, (CustomLineItem, ArrowItem, CustomRectItem, CustomEllipseItem, CustomPolygonItem, CustomPathItem)):
+            if isinstance(item, (CustomLineItem, ArrowItem, CustomRectItem, CustomEllipseItem, CustomPolygonItem, CustomPathItem, CalloutItem, SpotlightItem)):
                 pen = QPen(item.pen())
                 pen.setWidthF(value)
                 item.setPen(pen)
@@ -4132,11 +6071,11 @@ class AdvancedAnnotationApp(QMainWindow):
             pass
 
     def change_font_size(self, value):
-        """テキストのフォントサイズを更新（図形の太さとは独立）"""
+        """テキスト・吹き出しのフォントサイズを更新（図形の太さとは独立）"""
         self.scene.current_font_size = value
         changed = False
         for item in self.scene.selectedItems():
-            if isinstance(item, CustomTextItem):
+            if isinstance(item, (CustomTextItem, CalloutItem)):
                 font = item.font()
                 font.setPointSizeF(value)
                 item.setFont(font)
@@ -4250,7 +6189,7 @@ class AdvancedAnnotationApp(QMainWindow):
                 self.update_ui_state()
 
             elif ext == ".pdf":
-                doc = fitz.open(file_path)
+                doc = pymupdf.open(file_path)
                 if doc.needs_pass:
                     pw, ok = QInputDialog.getText(
                         self, "パスワード保護されたPDF", "PDFを開くパスワードを入力してください:",
@@ -4359,7 +6298,7 @@ class AdvancedAnnotationApp(QMainWindow):
 
         try:
             if ext == ".pdf":
-                doc = fitz.open(file_path)
+                doc = pymupdf.open(file_path)
                 try:
                     if doc.needs_pass:
                         pw, ok = QInputDialog.getText(
@@ -4463,11 +6402,18 @@ class AdvancedAnnotationApp(QMainWindow):
                 p2 = rot_pt(item.mapToScene(item.line().p2()))
                 item.setPos(QPointF(0, 0))
                 item.setLine(QLineF(p1, p2))
-            elif isinstance(item, (CustomRectItem, CustomEllipseItem)):
+            elif isinstance(item, (CustomRectItem, CustomEllipseItem, SpotlightItem)):
                 tl = rot_pt(item.mapToScene(item.rect().topLeft()))
                 br = rot_pt(item.mapToScene(item.rect().bottomRight()))
                 item.setPos(QPointF(0, 0))
                 item.setRect(QRectF(tl, br).normalized())
+            elif isinstance(item, CalloutItem):
+                tl = rot_pt(item.mapToScene(item.box_rect().topLeft()))
+                br = rot_pt(item.mapToScene(item.box_rect().bottomRight()))
+                tp = rot_pt(item.mapToScene(item.tip_point()))
+                item.setPos(QPointF(0, 0))
+                item.setBoxRect(QRectF(tl, br).normalized())
+                item.setTipPoint(tp)
             elif isinstance(item, CustomPolygonItem):
                 new_pts = [rot_pt(item.mapToScene(pt)) for pt in item.polygon()]
                 item.setPos(QPointF(0, 0))
@@ -4502,6 +6448,114 @@ class AdvancedAnnotationApp(QMainWindow):
         self.scene.save_state()
         self.fit_to_view()
         self.show_toast(f"キャンバスを {angle_deg}° 回転しました", 1800)
+
+    def _on_crop_selection_changed(self, has_valid):
+        if has_valid and self.scene.current_tool == "crop":
+            self.crop_bar.reposition()
+            self.crop_bar.show()
+            self.crop_bar.raise_()
+        else:
+            self.crop_bar.hide()
+
+    def confirm_crop(self):
+        if self.scene.crop_rect is not None and self.scene.crop_rect.width() >= 10 and self.scene.crop_rect.height() >= 10:
+            self.apply_crop(QRectF(self.scene.crop_rect))
+
+    def cancel_crop(self):
+        self.scene.clear_crop_selection()
+        self.crop_bar.hide()
+        self.set_tool("select")
+
+    def apply_crop(self, crop_rect):
+        """指定範囲で背景画像と注釈を切り抜く（Undo完全対応）"""
+        if self.scene.bg_item is None:
+            return
+        try:
+            sr = self.scene.sceneRect()
+            clamped = crop_rect.intersected(sr)
+            x = int(round(clamped.left() - sr.left()))
+            y = int(round(clamped.top() - sr.top()))
+            w = max(10, int(round(clamped.width())))
+            h = max(10, int(round(clamped.height())))
+
+            bg = self.scene.bg_item.pixmap()
+            x = max(0, min(bg.width() - 1, x))
+            y = max(0, min(bg.height() - 1, y))
+            w = min(bg.width() - x, w)
+            h = min(bg.height() - y, h)
+            if w < 10 or h < 10:
+                return
+
+            cropped_bg = bg.copy(x, y, w, h)
+            for item in self.scene.annotation_items():
+                item.moveBy(float(-x), float(-y))
+
+            self.scene.bg_item.setPixmap(cropped_bg)
+            self.scene.setSceneRect(QRectF(cropped_bg.rect()))
+            self.scene.original_image_rect = QRectF(cropped_bg.rect())
+            self.scene.clear_crop_selection()
+            self.crop_bar.hide()
+            self.scene.has_unsaved_changes = True
+            self.scene.save_state()
+            self.set_tool("select")
+            self.fit_to_view()
+            self.show_toast(f"切り抜きました ({w} × {h} px)")
+        except Exception as e:
+            QMessageBox.critical(self, "エラー", f"切り抜き処理中にエラーが発生しました。\n{e}")
+
+    def start_screen_capture(self, insert_as_annotation=False):
+        """ウィンドウを一時的に隠してデスクトップ画面の任意範囲を撮影する"""
+        if not insert_as_annotation and not self.check_unsaved_changes():
+            return
+        if insert_as_annotation and self.scene.bg_item is None:
+            insert_as_annotation = False
+
+        self._capture_insert_mode = insert_as_annotation
+        self._capture_was_maximized = self.isMaximized()
+        self.hide()
+        QApplication.processEvents()
+        QTimer.singleShot(280, self._launch_capture_overlay)
+
+    def _launch_capture_overlay(self):
+        try:
+            screen = QGuiApplication.screenAt(QCursor.pos()) or QGuiApplication.primaryScreen()
+            if screen is None:
+                self._restore_after_capture()
+                QMessageBox.warning(self, "エラー", "画面の取得に失敗しました。")
+                return
+            full_pixmap = screen.grabWindow(0)
+            if full_pixmap.isNull():
+                self._restore_after_capture()
+                QMessageBox.warning(self, "エラー", "スクリーンショットの取得に失敗しました。")
+                return
+            self._capture_overlay = ScreenCaptureOverlay(full_pixmap, screen.geometry())
+            self._capture_overlay.captured.connect(self._on_capture_finished)
+            self._capture_overlay.show()
+            self._capture_overlay.raise_()
+            self._capture_overlay.activateWindow()
+        except Exception as e:
+            self._restore_after_capture()
+            QMessageBox.critical(self, "エラー", f"画面撮影の開始に失敗しました。\n{e}")
+
+    def _restore_after_capture(self):
+        if self._capture_was_maximized:
+            self.showMaximized()
+        else:
+            self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    def _on_capture_finished(self, pixmap):
+        self._capture_overlay = None
+        self._restore_after_capture()
+        if pixmap is None or pixmap.isNull():
+            return
+        if self._capture_insert_mode and self.scene.bg_item is not None:
+            self._insert_pixmap_annotation(pixmap)
+            self.show_toast("撮影した画像を注釈として挿入しました")
+        else:
+            self._load_pixmap_as_new_canvas(pixmap, "screenshot")
+            self.show_toast(f"画面を撮影しました ({pixmap.width()} × {pixmap.height()} px)")
 
     def apply_margin(self, top, bottom, left, right, color):
         """余白を作成・削減して背景画像に適用し、既存の注釈をシフトして位置を補正する"""
@@ -4652,7 +6706,7 @@ class AdvancedAnnotationApp(QMainWindow):
 
     def _save_pdf_file(self, file_path):
         """オンメモリ処理と全ページ維持に対応した安全なPDF保存"""
-        out_doc = fitz.open()
+        out_doc = pymupdf.open()
         try:
             if self.current_pdf_doc is not None and len(self.current_pdf_doc) > 0:
                 self._stash_current_pdf_page_state()
@@ -4702,7 +6756,7 @@ class AdvancedAnnotationApp(QMainWindow):
                     self.current_pdf_doc.close()
                     self.current_pdf_doc = None
                     os.replace(tmp_path, file_path)
-                    self.current_pdf_doc = fitz.open(file_path)
+                    self.current_pdf_doc = pymupdf.open(file_path)
                     self.current_pdf_page = min(keep_page, len(self.current_pdf_doc) - 1)
                 except Exception:
                     if os.path.exists(tmp_path):
@@ -4711,7 +6765,7 @@ class AdvancedAnnotationApp(QMainWindow):
                         except OSError:
                             pass
                     if self.current_pdf_doc is None and os.path.exists(file_path):
-                        self.current_pdf_doc = fitz.open(file_path)
+                        self.current_pdf_doc = pymupdf.open(file_path)
                     raise
             else:
                 out_doc.save(file_path, deflate=True)
@@ -4721,7 +6775,7 @@ class AdvancedAnnotationApp(QMainWindow):
                 # 別名PDF保存した場合は新しいPDFを開き直して整合性を維持
                 keep_page = self.current_pdf_page if self.current_pdf_doc is not None else 0
                 self._close_current_pdf()
-                self.current_pdf_doc = fitz.open(file_path)
+                self.current_pdf_doc = pymupdf.open(file_path)
                 self.current_pdf_page = min(keep_page, len(self.current_pdf_doc) - 1)
         finally:
             if out_doc is not None:
