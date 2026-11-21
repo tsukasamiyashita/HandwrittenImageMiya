@@ -36,7 +36,7 @@ jobs:
         --clean 
         --name "HandwrittenImageMiya-v1.6.0" 
         --icon "icon.ico" 
-        --add-data "readme.md;."
+        --add-data "README.MD;."
         --add-data "icon.ico;."
         --collect-all pymupdf 
         --hidden-import fitz 
